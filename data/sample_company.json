@@ -1,0 +1,26 @@
+{
+  "name": "TechCorp Inc.",
+  "description": "TechCorp is a leading technology company focused on developing innovative solutions for businesses worldwide. We specialize in cloud computing, artificial intelligence, and enterprise software.",
+  "values": [
+    "Innovation",
+    "Excellence",
+    "Collaboration",
+    "Integrity",
+    "Customer Focus"
+  ],
+  "culture": {
+    "work_environment": "Fast-paced, collaborative, and innovative",
+    "team_structure": "Cross-functional teams with flat hierarchy",
+    "development_practices": "Agile/Scrum with continuous integration/deployment"
+  },
+  "benefits": [
+    "Competitive salary",
+    "Health insurance",
+    "401(k) matching",
+    "Remote work options",
+    "Professional development"
+  ],
+  "industry": "Technology",
+  "size": "500-1000 employees",
+  "founded": "2015"
+} 

@@ -1,0 +1,14 @@
+{
+  "name": "Alex Johnson",
+  "skills": [
+    "Python",
+    "JavaScript",
+    "React",
+    "Node.js",
+    "SQL",
+    "Git",
+    "AWS"
+  ],
+  "experience": "5 years of software development experience",
+  "background": "Computer Science degree from University of Technology, previously worked at StartupX and BigTechCorp."
+}

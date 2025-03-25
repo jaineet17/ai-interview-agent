@@ -1,0 +1,31 @@
+{
+  "name": "John Smith",
+  "experience": "8 years of software development experience, including 5 years in full-stack development",
+  "background": "Bachelor's degree in Computer Science from Stanford University",
+  "skills": [
+    "Python",
+    "Django",
+    "React",
+    "PostgreSQL",
+    "AWS",
+    "Docker",
+    "CI/CD"
+  ],
+  "current_role": "Senior Software Engineer at TechStart",
+  "achievements": [
+    "Led development of a microservices architecture serving 1M+ users",
+    "Implemented automated testing reducing bug reports by 40%",
+    "Mentored 5 junior developers who were promoted to mid-level"
+  ],
+  "interests": [
+    "Cloud computing",
+    "System architecture",
+    "Team leadership",
+    "Open source contribution"
+  ],
+  "certifications": [
+    "AWS Certified Solutions Architect",
+    "Docker Certified Associate"
+  ],
+  "languages": ["English (Native)", "Spanish (Intermediate)"]
+} 

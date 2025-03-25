@@ -1,0 +1,24 @@
+{
+  "title": "Senior Software Engineer",
+  "description": "We are looking for an experienced software engineer to join our team. The ideal candidate will have strong experience in full-stack development, particularly with Python and modern web frameworks.",
+  "required_skills": [
+    "Python",
+    "Django/Flask",
+    "React/Vue.js",
+    "SQL/NoSQL databases",
+    "RESTful APIs",
+    "Git",
+    "Docker",
+    "AWS/Azure"
+  ],
+  "responsibilities": [
+    "Design and implement new features",
+    "Write clean, maintainable code",
+    "Collaborate with cross-functional teams",
+    "Mentor junior developers",
+    "Participate in code reviews"
+  ],
+  "experience_level": "5+ years",
+  "location": "Remote",
+  "employment_type": "Full-time"
+} 
