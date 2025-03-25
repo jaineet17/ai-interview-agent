@@ -3,6 +3,7 @@ import logging
 import time
 import re
 from typing import Dict, List, Any, Optional, Tuple
+import traceback
 
 from .interview_generator import InterviewGenerator
 
@@ -398,9 +399,9 @@ class InterviewEngine:
             return None
     
     def process_response(self, response_text: str) -> Dict[str, Any]:
-        """Process a candidate's response and determine the next action."""
+        """Process a candidate's response with improved error handling."""
         try:
-            # Track response in history
+            # Register response regardless of outcome
             self.responses.append({
                 "question_index": self.current_question_index,
                 "question": self.get_current_question(),
@@ -408,10 +409,9 @@ class InterviewEngine:
                 "timestamp": time.time()
             })
             
-            # Get the current question
             current_question = self.get_current_question()
             if not current_question:
-                logger.error("Failed to get current question during response processing")
+                logger.error("Invalid question index during response processing")
                 return self._fallback_response_handler()
                 
             logger.info(f"Processing response for question {self.current_question_index} ({current_question['category']})")
@@ -423,6 +423,16 @@ class InterviewEngine:
                 logger.error(f"Error adding to conversation memory: {str(memory_err)}")
                 # Continue processing even if memory fails
             
+            # Primary response processing logic
+            return self._process_response_core(response_text, current_question)
+            
+        except Exception as e:
+            logger.error(f"Unhandled error in process_response: {str(e)}")
+            return self._fallback_response_handler()
+    
+    def _process_response_core(self, response_text: str, current_question: Dict[str, Any]) -> Dict[str, Any]:
+        """Core response processing logic separated for clarity."""
+        try:
             # Check if this response is similar to previous responses
             try:
                 if self._check_duplicate_response(response_text, self.current_question_index):
@@ -444,153 +454,111 @@ class InterviewEngine:
             
             # Check if interview is complete (final question reached and no follow-up needed)
             if self.current_question_index >= len(self.questions) - 1 and not self._should_ask_follow_up(response_text, current_question, follow_up_count):
-                logger.info("Interview complete after final question")
-                self.interview_complete = True
-                
-                # Generate interview summary
-                try:
-                    self.generate_summary()
-                except Exception as sum_err:
-                    logger.error(f"Error generating interview summary: {str(sum_err)}")
-                    # Create a basic summary if generation fails
-                    self.summary = {"overall_impression": "Interview completed successfully."}
-                
-                # Return the completion response
-                return {
-                    "status": "complete",
-                    "closing_remarks": self.script.get("closing", "Thank you for your time today. We'll be in touch with next steps."),
-                    "summary": self.summary
-                }
+                return self._handle_interview_completion()
             elif self._should_ask_follow_up(response_text, current_question, follow_up_count):
-                logger.info("Generating follow-up question")
-                
-                try:
-                    follow_up = self.generator.generate_follow_up_question(
-                        current_question, 
-                        response_text,
-                        self.job_data,
-                        self.company_data,
-                        self.candidate_data
-                    )
-                    
-                    # Check if follow-up generation failed or returned None
-                    if not follow_up:
-                        logger.info("No follow-up needed, moving to next question")
-                        next_question = self.get_next_question()
-                        
-                        if next_question:
-                            # Generate a contextual transition
-                            try:
-                                conversational_buffer = self._get_conversational_buffer(response_text, current_question, next_question)
-                            except Exception as buffer_err:
-                                logger.error(f"Error generating conversational buffer: {str(buffer_err)}")
-                                conversational_buffer = "Thank you for your response."
-                            
-                            logger.info(f"Moving to next question ({next_question['category']})")
-                            return {
-                                "status": "active",
-                                "acknowledgment": conversational_buffer,
-                                "question": next_question,
-                                "question_number": self.current_question_index + 1,
-                                "total_questions": len(self.questions)
-                            }
-                        else:
-                            # End of interview reached
-                            logger.info("Reached end of questions after follow-up attempt")
-                            self.interview_complete = True
-                            
-                            # Generate interview summary
-                            try:
-                                self.generate_summary()
-                            except Exception as end_err:
-                                logger.error(f"Error generating end summary: {str(end_err)}")
-                                self.summary = {"overall_impression": "Interview completed successfully."}
-                            
-                            return {
-                                "status": "complete",
-                                "closing_remarks": self.script.get("closing", "Thank you for your time today. We'll be in touch with next steps."),
-                                "summary": self.summary
-                            }
-                    
-                    self.follow_ups.append({
-                        "question_index": self.current_question_index,
-                        "original_question": current_question,
-                        "follow_up_question": follow_up,
-                        "response": response_text
-                    })
-                    
-                    logger.info("Generated follow-up question")
-                    
-                    # Generate an acknowledgment of their response
-                    try:
-                        acknowledgment = self._generate_acknowledgment(current_question, response_text)
-                    except Exception as ack_err:
-                        logger.error(f"Error generating acknowledgment: {str(ack_err)}")
-                        acknowledgment = "Thank you for your response."
-                    
-                    return {
-                        "status": "active",
-                        "acknowledgment": acknowledgment,
-                        "question": {
-                            "question": follow_up,
-                            "category": current_question["category"],
-                            "follow_up": True
-                        },
-                        "question_number": self.current_question_index + 1,
-                        "total_questions": len(self.questions)
-                    }
-                except Exception as follow_up_err:
-                    logger.error(f"Error in follow-up generation process: {str(follow_up_err)}")
-                    # If follow-up generation fails, move to the next question
-                    next_question = self.get_next_question()
-                    return {
-                        "status": "active",
-                        "acknowledgment": "Thank you for sharing that information. Let's move on to the next question.",
-                        "question": next_question,
-                        "question_number": self.current_question_index + 1,
-                        "total_questions": len(self.questions)
-                    }
+                return self._handle_follow_up_generation(response_text, current_question)
             else:
-                # No follow-up needed, move to next question
-                logger.info("No follow-up needed, moving to next question")
-                next_question = self.get_next_question()
+                return self._handle_next_question(response_text, current_question)
                 
-                if next_question:
-                    # Generate a contextual transition
-                    try:
-                        conversational_buffer = self._get_conversational_buffer(response_text, current_question, next_question)
-                    except Exception as buffer_err:
-                        logger.error(f"Error generating conversational buffer: {str(buffer_err)}")
-                        conversational_buffer = "Thank you for your response."
-                    
-                    logger.info(f"Moving to next question ({next_question['category']})")
-                    return {
-                        "status": "active",
-                        "acknowledgment": conversational_buffer,
-                        "question": next_question,
-                        "question_number": self.current_question_index + 1, 
-                        "total_questions": len(self.questions)
-                    }
-                else:
-                    # End of interview reached
-                    logger.info("Reached end of questions, interview complete")
-                    self.interview_complete = True
-                    
-                    # Generate interview summary
-                    try:
-                        self.generate_summary()
-                    except Exception as sum_err:
-                        logger.error(f"Error generating summary at end: {str(sum_err)}")
-                        self.summary = {"overall_impression": "Interview completed successfully."}
-                    
-                    return {
-                        "status": "complete",
-                        "closing_remarks": self.script.get("closing", "Thank you for your time today. We'll be in touch with next steps."),
-                        "summary": self.summary
-                    }
         except Exception as e:
-            logger.error(f"Unhandled error in process_response: {str(e)}")
+            logger.error(f"Error in core response processing: {str(e)}")
+            logger.debug(f"Stack trace: {traceback.format_exc()}")
             return self._fallback_response_handler()
+    
+    def _handle_interview_completion(self) -> Dict[str, Any]:
+        """Handle the completion of the interview."""
+        logger.info("Interview complete after final question")
+        self.interview_complete = True
+        
+        # Generate interview summary
+        try:
+            self.generate_summary()
+        except Exception as sum_err:
+            logger.error(f"Error generating interview summary: {str(sum_err)}")
+            # Create a basic summary if generation fails
+            self.summary = {"overall_impression": "Interview completed successfully."}
+        
+        # Return the completion response
+        return {
+            "status": "complete",
+            "closing_remarks": self.script.get("closing", "Thank you for your time today. We'll be in touch with next steps."),
+            "summary": self.summary
+        }
+    
+    def _handle_follow_up_generation(self, response_text: str, current_question: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate and handle follow-up questions."""
+        logger.info("Generating follow-up question")
+        
+        try:
+            follow_up = self.generator.generate_follow_up_question(
+                current_question, 
+                response_text,
+                self.job_data,
+                self.company_data,
+                self.candidate_data
+            )
+            
+            # Check if follow-up generation failed or returned None
+            if not follow_up:
+                logger.info("No follow-up needed, moving to next question")
+                return self._handle_next_question(response_text, current_question)
+            
+            self.follow_ups.append({
+                "question_index": self.current_question_index,
+                "original_question": current_question,
+                "follow_up_question": follow_up,
+                "response": response_text
+            })
+            
+            logger.info("Generated follow-up question")
+            
+            # Generate an acknowledgment of their response
+            try:
+                acknowledgment = self._generate_acknowledgment(current_question, response_text)
+            except Exception as ack_err:
+                logger.error(f"Error generating acknowledgment: {str(ack_err)}")
+                acknowledgment = "Thank you for your response."
+            
+            return {
+                "status": "active",
+                "acknowledgment": acknowledgment,
+                "question": {
+                    "question": follow_up,
+                    "category": current_question["category"],
+                    "follow_up": True
+                },
+                "question_number": self.current_question_index + 1,
+                "total_questions": len(self.questions)
+            }
+        except Exception as follow_up_err:
+            logger.error(f"Error in follow-up generation process: {str(follow_up_err)}")
+            # If follow-up generation fails, move to the next question
+            return self._handle_next_question(response_text, current_question)
+    
+    def _handle_next_question(self, response_text: str, current_question: Dict[str, Any]) -> Dict[str, Any]:
+        """Move to the next question in the sequence."""
+        logger.info("Moving to next question")
+        next_question = self.get_next_question()
+        
+        if next_question:
+            # Generate a contextual transition
+            try:
+                conversational_buffer = self._get_conversational_buffer(response_text, current_question, next_question)
+            except Exception as buffer_err:
+                logger.error(f"Error generating conversational buffer: {str(buffer_err)}")
+                conversational_buffer = "Thank you for your response."
+            
+            logger.info(f"Moving to next question ({next_question['category']})")
+            return {
+                "status": "active",
+                "acknowledgment": conversational_buffer,
+                "question": next_question,
+                "question_number": self.current_question_index + 1, 
+                "total_questions": len(self.questions)
+            }
+        else:
+            # End of interview reached
+            return self._handle_interview_completion()
     
     def _fallback_response_handler(self) -> Dict[str, Any]:
         """Emergency fallback to ensure the interview continues even if errors occur."""

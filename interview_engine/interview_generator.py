@@ -856,7 +856,8 @@ If a follow-up IS needed, respond with ONE brief, focused follow-up question (un
         """Generate a natural transition between questions based on conversation memory."""
         logger.info("Generating natural transition between questions")
         
-        prompt = contextual_prompt
+        # Modify the prompt to explicitly instruct not to include meta-commentary
+        prompt = contextual_prompt + "\n\nIMPORTANT: Return ONLY the transition text with no explanation or meta-commentary. Do not include phrases like 'This response acknowledges...' or explanations about what the transition does. Provide ONLY the text that should be shown to the candidate."
         
         try:
             transition = self._generate_with_llm(prompt, max_tokens=150)
@@ -865,11 +866,38 @@ If a follow-up IS needed, respond with ONE brief, focused follow-up question (un
             transition = transition.strip()
             if transition.startswith('"') and transition.endswith('"'):
                 transition = transition[1:-1].strip()
+                
+            # Remove any meta-commentary that might have been included despite instructions
+            transition = self._remove_meta_commentary(transition)
             
             return transition
         except Exception as e:
             logger.error(f"Error generating transition: {e}")
             return next_question.get("transition", "Let's move on to the next question.")
+            
+    def _remove_meta_commentary(self, text: str) -> str:
+        """Remove meta-commentary from transition text."""
+        # Check for common meta-commentary patterns
+        meta_patterns = [
+            r"This (response|transition) acknowledges.*",
+            r"This shows.*",
+            r"This transition.*",
+            r".*\bshows interest in\b.*",
+            r".*\btransitioning into\b.*",
+            r".*\bsmooth(ly)? transition(s|ing)?\b.*"
+        ]
+        
+        # If any pattern is found in the text, extract only the first sentence
+        import re
+        for pattern in meta_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                # Extract only the first sentence which is likely the actual transition
+                sentences = re.split(r'[.!?]\s+', text)
+                if sentences:
+                    return sentences[0].strip() + "."
+                break
+                
+        return text
 
     def _generate_with_llm(self, prompt: str, max_tokens: int = 4000, temperature: float = 0.7) -> str:
         """Helper method to generate text using the LLM interface."""

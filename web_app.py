@@ -79,7 +79,7 @@ def serve_react(path):
 # API routes
 @app.route('/api/upload/<doc_type>', methods=['POST'])
 def upload_document(doc_type):
-    """Upload a job, company, or candidate document."""
+    """Upload a job, company, or candidate document with enhanced security."""
     try:
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
@@ -88,22 +88,86 @@ def upload_document(doc_type):
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
         
-        # Get allowed file extensions
-        allowed_extensions = {'.pdf', '.docx', '.txt', '.json'}
-        file_ext = os.path.splitext(file.filename)[1].lower()
+        # Get file details for validation
+        filename = secure_filename(file.filename)
+        file_ext = os.path.splitext(filename)[1].lower()
+        content_type = file.content_type
         
-        if file_ext not in allowed_extensions:
+        # Define allowed extensions and their corresponding MIME types
+        allowed_types = {
+            '.pdf': ['application/pdf'],
+            '.docx': [
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/vnd.ms-word.document.macroEnabled.12'
+            ],
+            '.txt': ['text/plain'],
+            '.json': ['application/json']
+        }
+        
+        # Validate file extension
+        if file_ext not in allowed_types:
             return jsonify({
-                "error": f"File type not supported. Please upload {', '.join(allowed_extensions)}"
+                "error": f"File type not supported. Please upload PDF, DOCX, TXT, or JSON"
             }), 400
         
-        # Save uploaded file
-        upload_dir = os.path.join(os.path.dirname(__file__), 'uploads')
+        # Validate MIME type
+        if content_type not in allowed_types.get(file_ext, []):
+            return jsonify({
+                "error": f"File content does not match its extension. Security check failed."
+            }), 400
+        
+        # Validate file size - 10MB limit
+        max_size = 10 * 1024 * 1024  # 10MB
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)  # Reset file pointer
+        
+        if file_size > max_size:
+            return jsonify({
+                "error": f"File size exceeds the 10MB limit."
+            }), 400
+        
+        # Create a unique filename to prevent overwriting
+        unique_filename = f"{int(time.time())}_{filename}"
+        
+        # Save uploaded file in document type specific folder for better organization
+        upload_dir = os.path.join(os.path.dirname(__file__), 'uploads', doc_type)
         os.makedirs(upload_dir, exist_ok=True)
         
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(upload_dir, filename)
+        filepath = os.path.join(upload_dir, unique_filename)
         file.save(filepath)
+        
+        # Basic content validation for different file types
+        try:
+            # For PDF, check it's actually a PDF
+            if file_ext == '.pdf':
+                import PyPDF2
+                try:
+                    PyPDF2.PdfReader(filepath)
+                except Exception as e:
+                    os.remove(filepath)  # Delete the suspicious file
+                    return jsonify({"error": f"Invalid PDF file: {str(e)}"}), 400
+            
+            # For DOCX, verify it's a valid DOCX
+            elif file_ext == '.docx':
+                import docx
+                try:
+                    docx.Document(filepath)
+                except Exception as e:
+                    os.remove(filepath)  # Delete the suspicious file
+                    return jsonify({"error": f"Invalid DOCX file: {str(e)}"}), 400
+            
+            # For JSON, verify it's valid JSON
+            elif file_ext == '.json':
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        json.load(f)
+                except json.JSONDecodeError as e:
+                    os.remove(filepath)  # Delete the invalid file
+                    return jsonify({"error": f"Invalid JSON file: {str(e)}"}), 400
+        except ImportError as e:
+            logger.warning(f"Couldn't validate file content due to missing dependency: {str(e)}")
+            # Continue anyway since we already checked MIME type
         
         # Process document based on type
         processor = DocumentProcessor()
@@ -112,22 +176,29 @@ def upload_document(doc_type):
             if doc_type == 'job':
                 data = processor.parse_job_post(filepath)
                 session['job_data'] = data
+                logger.info(f"Successfully processed job document: {filename}")
                 return jsonify({"success": True, "message": "Job data uploaded", "data": data})
             
             elif doc_type == 'company':
                 data = processor.parse_company_profile(filepath)
                 session['company_data'] = data
+                logger.info(f"Successfully processed company document: {filename}")
                 return jsonify({"success": True, "message": "Company data uploaded", "data": data})
             
             elif doc_type == 'candidate':
                 data = processor.parse_resume(filepath)
                 session['candidate_data'] = data
+                logger.info(f"Successfully processed candidate document: {filename}")
                 return jsonify({"success": True, "message": "Candidate data uploaded", "data": data})
             
             else:
+                # Remove file if document type is invalid
+                os.remove(filepath)
                 return jsonify({"error": f"Invalid document type: {doc_type}"}), 400
                 
         except Exception as e:
+            # Delete the file if processing failed
+            os.remove(filepath)
             logger.error(f"Document processing error: {str(e)}")
             return jsonify({"error": f"Error processing document: {str(e)}"}), 500
             

@@ -10,6 +10,7 @@ try:
     import ollama
     OLLAMA_PACKAGE_AVAILABLE = True
 except ImportError:
+    logger.warning("Ollama package not available. Using HTTP fallback.")
     OLLAMA_PACKAGE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class LLMProvider(ABC):
 
 
 class OllamaProvider(LLMProvider):
-    """Provider for Ollama API using the official Python package"""
+    """Provider for Ollama API with improved reliability"""
     
     def __init__(self, model_name: str = "llama2"):
         self.model_name = model_name
@@ -57,6 +58,12 @@ class OllamaProvider(LLMProvider):
         from config import OLLAMA_API_BASE, OLLAMA_API_KEY
         self.api_base = OLLAMA_API_BASE
         self.api_key = OLLAMA_API_KEY
+        
+        # Fallback model in case the requested one isn't available
+        self.fallback_model = "llama2"  # A commonly available model
+        
+        # Health check on initialization
+        self.is_healthy = self._check_health()
         
         # Configure the Ollama client if the package is available
         if OLLAMA_PACKAGE_AVAILABLE:
@@ -75,10 +82,44 @@ class OllamaProvider(LLMProvider):
             
         logger.info(f"Initialized Ollama provider with model: {model_name}")
     
+    def _check_health(self) -> bool:
+        """Check if Ollama service is healthy and the model is available"""
+        try:
+            if OLLAMA_PACKAGE_AVAILABLE:
+                # List available models
+                models = ollama.list()
+                available_models = [model['name'] for model in models.get('models', [])]
+                
+                if self.model_name in available_models:
+                    logger.info(f"Model {self.model_name} is available")
+                    return True
+                else:
+                    logger.warning(f"Model {self.model_name} not found. Available models: {available_models}")
+                    return False
+            else:
+                # Fallback HTTP check
+                import requests
+                response = requests.get(f"{self.api_base}/api/tags")
+                if response.status_code == 200:
+                    return True
+                else:
+                    logger.warning(f"Ollama API health check failed: {response.status_code}")
+                    return False
+        except Exception as e:
+            logger.error(f"Ollama health check failed: {str(e)}")
+            return False
+    
     def get_completion(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
-        """Get completion from Ollama using the Python package if available"""
+        """Get completion from Ollama with improved reliability"""
         max_retries = 2
         retry_count = 0
+        
+        if not self.is_healthy:
+            # Try to check health again before giving up
+            self.is_healthy = self._check_health()
+            if not self.is_healthy:
+                logger.warning("Ollama service is not healthy, using fallback response")
+                return self._generate_labeled_fallback(prompt)
         
         while retry_count <= max_retries:
             try:
@@ -99,13 +140,32 @@ class OllamaProvider(LLMProvider):
                         return response['message']['content']
                     else:
                         logger.error(f"Unexpected response format from Ollama: {response}")
-                        # If this is the last retry, break out to the fallback
-                        if retry_count == max_retries:
-                            break
+                        # Try with fallback model if this is the last retry
+                        if retry_count == max_retries and self.model_name != self.fallback_model:
+                            logger.info(f"Trying fallback model: {self.fallback_model}")
+                            orig_model = self.model_name
+                            self.model_name = self.fallback_model
+                            try:
+                                response = ollama.chat(
+                                    model=self.model_name,
+                                    messages=[{"role": "user", "content": prompt}],
+                                    options={
+                                        "temperature": temperature,
+                                        "num_predict": max_tokens
+                                    }
+                                )
+                                if response and 'message' in response and 'content' in response['message']:
+                                    return response['message']['content']
+                            except Exception:
+                                pass
+                            finally:
+                                self.model_name = orig_model
+                        
+                        # If fallback model also failed, use deterministic fallback
                         retry_count += 1
                         continue
                 else:
-                    # Fallback to HTTP requests
+                    # Fallback to HTTP requests with better error handling
                     import requests
                     
                     # Set up session with headers
@@ -134,23 +194,61 @@ class OllamaProvider(LLMProvider):
                     
                     if response.status_code == 200:
                         return response.json().get("response", "")
-                    else:
-                        logger.error(f"Ollama API error: {response.status_code}, {response.text}")
-                        
-                        # If this is the last retry, break out to the fallback
-                        if retry_count == max_retries:
-                            break
-                        
-                        retry_count += 1
-                        continue
+                    elif response.status_code == 404 and self.model_name != self.fallback_model:
+                        # Model not found, try fallback model
+                        logger.info(f"Model {self.model_name} not found, trying fallback model {self.fallback_model}")
+                        orig_model = self.model_name
+                        self.model_name = self.fallback_model
+                        try:
+                            response = session.post(
+                                api_endpoint,
+                                json={
+                                    "model": self.model_name,
+                                    "prompt": prompt,
+                                    "stream": False,
+                                    "options": {
+                                        "temperature": temperature,
+                                        "num_predict": max_tokens
+                                    }
+                                },
+                                timeout=30
+                            )
+                            if response.status_code == 200:
+                                return response.json().get("response", "")
+                        except Exception:
+                            pass
+                        finally:
+                            self.model_name = orig_model
+                    
+                    logger.error(f"Ollama API error: {response.status_code}, {response.text}")
+                    retry_count += 1
+                    continue
                         
             except Exception as e:
                 logger.error(f"Error calling Ollama: {str(e)}")
                 logger.debug(f"Exception details: {traceback.format_exc()}")
                 
-                # If this is the last retry, break out to the fallback
-                if retry_count == max_retries:
-                    break
+                # If this is the last retry, try fallback model
+                if retry_count == max_retries and self.model_name != self.fallback_model:
+                    logger.info(f"Trying fallback model: {self.fallback_model}")
+                    orig_model = self.model_name
+                    self.model_name = self.fallback_model
+                    try:
+                        if OLLAMA_PACKAGE_AVAILABLE:
+                            response = ollama.chat(
+                                model=self.model_name,
+                                messages=[{"role": "user", "content": prompt}],
+                                options={
+                                    "temperature": temperature,
+                                    "num_predict": max_tokens
+                                }
+                            )
+                            if response and 'message' in response and 'content' in response['message']:
+                                return response['message']['content']
+                    except Exception:
+                        pass
+                    finally:
+                        self.model_name = orig_model
                 
                 # Try with a shorter max_tokens on retry to make it faster
                 max_tokens = max(max_tokens // 2, 250)
@@ -159,80 +257,43 @@ class OllamaProvider(LLMProvider):
                 continue
         
         # If we got here, all retries failed. Use a fallback solution.
-        return self._generate_deterministic_fallback(prompt)
+        return self._generate_labeled_fallback(prompt)
+    
+    def get_chat_completion(self, messages: List[Dict[str, str]], max_tokens: int = 1000, temperature: float = 0.7) -> str:
+        """Get chat completion from Ollama with improved reliability."""
+        # For simple chat completion, just use the last message as prompt for now
+        if messages and len(messages) > 0:
+            last_message = messages[-1]
+            prompt = last_message.get("content", "")
+            return self.get_completion(prompt, max_tokens, temperature)
+        return ""
+    
+    def _generate_labeled_fallback(self, prompt: str) -> str:
+        """Generate a fallback response with a note that it's not from the LLM"""
+        fallback_response = self._generate_deterministic_fallback(prompt)
+        
+        # Add clear indication this is a fallback response
+        return f"[Note: Using pre-programmed fallback response due to LLM service unavailability]\n\n{fallback_response}"
     
     def _generate_deterministic_fallback(self, prompt: str) -> str:
-        """Generate a deterministic response when Ollama fails"""
-        logger.warning("Using deterministic fallback response generation")
+        """Generate a deterministic fallback response based on the prompt."""
+        # Very simple response based on prompt length and content
+        words = prompt.split()
+        word_count = len(words)
         
-        # Check for common prompt types
-        if "interview script" in prompt.lower():
-            logger.info("Generating fallback interview script")
-            return """
-            {
-              "introduction": "Welcome to your interview. I'm excited to learn more about your background and experience.",
-              "questions": {
-                "job_specific": [
-                  {
-                    "question": "Could you tell me about your relevant experience for this position?",
-                    "purpose": "To understand the candidate's job history and skills",
-                    "good_answer_criteria": "Specific examples that demonstrate required skills"
-                  },
-                  {
-                    "question": "What interests you most about this position?",
-                    "purpose": "To gauge the candidate's motivation",
-                    "good_answer_criteria": "Alignment with job responsibilities and company values"
-                  }
-                ],
-                "technical": [
-                  {
-                    "question": "Can you describe a technical challenge you faced recently and how you solved it?",
-                    "purpose": "To assess problem-solving abilities",
-                    "good_answer_criteria": "Clear problem description, logical approach, effective solution"
-                  }
-                ],
-                "company_fit": [
-                  {
-                    "question": "How do you see yourself contributing to our company culture?",
-                    "purpose": "To assess cultural fit",
-                    "good_answer_criteria": "Understanding of company values, examples of alignment"
-                  }
-                ],
-                "behavioral": [
-                  {
-                    "question": "Tell me about a time when you had to adapt to a significant change at work.",
-                    "purpose": "To assess adaptability",
-                    "good_answer_criteria": "Positive attitude toward change, specific actions taken"
-                  }
-                ]
-              },
-              "closing": "Thank you for taking the time to interview with us today. Do you have any questions for me?"
-            }
-            """
-        elif "follow up" in prompt.lower() or "follow-up" in prompt.lower():
-            logger.info("Generating fallback follow-up question")
-            return "Could you elaborate more on that with a specific example from your experience?"
-        elif "interview summary" in prompt.lower():
-            logger.info("Generating fallback interview summary")
-            return """
-            {
-              "candidate_name": "Candidate",
-              "position": "Software Engineer",
-              "strengths": ["Technical knowledge", "Communication skills", "Problem-solving approach"],
-              "areas_for_improvement": ["Could provide more specific examples", "Expand on project outcomes"],
-              "technical_evaluation": "The candidate demonstrated adequate technical knowledge for the position.",
-              "cultural_fit": "The candidate appears to align well with our company values.",
-              "recommendation": "Recommend for next interview round",
-              "next_steps": "Technical assessment and team interview",
-              "overall_assessment": "The candidate shows promise and should be considered for the next stage of the process."
-            }
-            """
-        elif "acknowledgment" in prompt.lower():
-            logger.info("Generating fallback acknowledgment")
-            return "Thank you for sharing that valuable experience. I appreciate the detailed example."
-        else:
-            logger.info("Generating generic fallback response")
-            return "I understand your point. That's helpful information."
+        if "follow-up" in prompt.lower():
+            return "Could you elaborate more on that point? I'd like to understand your perspective better."
+        
+        if "summary" in prompt.lower():
+            return "Based on our conversation, you have demonstrated relevant experience and skills for this position. Thank you for sharing your background with me today."
+        
+        if word_count < 50:
+            return "I understand your query. To give you a better response, I would need the LLM service to be operational. Please try again later when the service is available."
+        
+        if word_count < 100:
+            return "Thank you for your detailed query. The LLM service is currently unavailable, so I'm providing this pre-programmed response. Please try again later for a more tailored answer to your specific question."
+        
+        return "I appreciate your comprehensive question. However, the LLM service is currently unavailable. This is an automated fallback response. The system will attempt to reconnect with the LLM service shortly. In the meantime, please consider rephrasing your question or trying again later."
 
 
 class DeepSeekProvider(LLMProvider):
