@@ -7,11 +7,50 @@ import argparse
 import uuid
 import mimetypes
 from pathlib import Path
+from datetime import datetime, timedelta
+import threading
 from flask import Flask, render_template, request, jsonify, session, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from config import API_HOST, API_PORT
+from validators import validate_json, validate_session, set_session_globals
+from interview_engine import InterviewEngine, InterviewGenerator
+from interview_engine.llm_adapter import LLMAdapter
+from interview_engine.interview_engine import resource_monitor
+
+# Session cleanup mechanism
+SESSION_TIMEOUT = 60 * 60  # 1 hour in seconds
+session_last_access = {}
+session_lock = threading.Lock()
+
+def session_cleanup_task():
+    """Background task to clean up expired sessions"""
+    with session_lock:
+        current_time = datetime.now()
+        expired_sessions = []
+        
+        for session_id, last_access in session_last_access.items():
+            if (current_time - last_access).total_seconds() > SESSION_TIMEOUT:
+                expired_sessions.append(session_id)
+        
+        # Clean up expired sessions
+        for session_id in expired_sessions:
+            if session_id in interview_engines:
+                logger.info(f"Cleaning up expired session: {session_id}")
+                del interview_engines[session_id]
+                del session_last_access[session_id]
+    
+    # Schedule the next cleanup
+    threading.Timer(300, session_cleanup_task).start()  # Run every 5 minutes
+
+# Resource monitoring task to periodically check memory usage
+def resource_monitor_task():
+    """Background task to monitor system resources"""
+    resource_monitor.check_resources()
+    
+    # Schedule the next check
+    threading.Timer(60, resource_monitor_task).start()  # Run every minute
 
 # Import custom components with error handling
 try:
@@ -19,6 +58,7 @@ try:
     from document_processor import DocumentProcessor
     from interview_engine import InterviewEngine, InterviewGenerator
     from interview_engine.llm_adapter import LLMAdapter
+    from interview_engine.interview_engine import resource_monitor
 except ImportError as e:
     print(f"Error importing required modules: {e}")
     raise
@@ -42,6 +82,27 @@ except Exception as e:
 app = Flask(__name__, static_folder='frontend/dist')
 app.secret_key = os.getenv("FLASK_SECRET_KEY", str(uuid.uuid4()))
 app.config['SESSION_TYPE'] = 'filesystem'
+
+# Set session globals for validators
+set_session_globals(session_lock, SESSION_TIMEOUT, interview_engines, session_last_access)
+
+# Start the cleanup task when the app starts
+@app.before_first_request
+def start_session_cleanup():
+    session_cleanup_task()
+
+# Start the resource monitor when the app starts
+@app.before_first_request
+def start_resource_monitor():
+    resource_monitor_task()
+
+# Add this middleware to track session activity
+@app.before_request
+def check_session_activity():
+    session_id = session.get('session_id')
+    if session_id:
+        with session_lock:
+            session_last_access[session_id] = datetime.now()
 
 # Set up CORS to allow Web Speech API to work properly
 CORS(app)
@@ -67,6 +128,34 @@ except Exception as e:
     logger.error(f"Error initializing components: {e}")
     raise
 
+# Helper function to get interview engine with session validation
+def get_interview_engine(session_id):
+    """Get the interview engine for the session with expiry handling."""
+    if not session_id:
+        return None, "No session ID found. Please initialize an interview."
+    
+    with session_lock:
+        if session_id not in session_last_access:
+            return None, "Session not found. It may have expired."
+        
+        current_time = datetime.now()
+        last_access = session_last_access[session_id]
+        
+        if (current_time - last_access).total_seconds() > SESSION_TIMEOUT:
+            # Session has expired
+            if session_id in interview_engines:
+                del interview_engines[session_id]
+            del session_last_access[session_id]
+            return None, "Your session has expired. Please refresh and start a new interview."
+        
+        # Update last access time
+        session_last_access[session_id] = current_time
+        
+        if session_id not in interview_engines:
+            return None, "No active interview found for this session."
+        
+        return interview_engines[session_id], None
+
 # Serve React frontend
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -81,6 +170,13 @@ def serve_react(path):
 def upload_document(doc_type):
     """Upload a job, company, or candidate document with enhanced security."""
     try:
+        # Validate doc_type
+        valid_doc_types = ['job', 'company', 'candidate']
+        if doc_type not in valid_doc_types:
+            return jsonify({
+                "error": f"Invalid document type. Must be one of: {', '.join(valid_doc_types)}"
+            }), 400
+            
         if 'file' not in request.files:
             return jsonify({"error": "No file provided"}), 400
         
@@ -207,6 +303,7 @@ def upload_document(doc_type):
         return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
 @app.route('/api/load_sample_data', methods=['POST'])
+@validate_json()
 def load_sample_data():
     """Load sample data for demonstration."""
     try:
@@ -241,12 +338,16 @@ def load_sample_data():
         })
 
 @app.route('/api/initialize_interview', methods=['POST'])
+@validate_json()  # No required fields, but validates JSON format
 def initialize_interview():
     """Initialize the interview engine with job, company, and candidate data."""
     try:
         # Check if we have the necessary data
         if 'job_data' not in session or 'company_data' not in session or 'candidate_data' not in session:
-            raise ValueError("Missing required data. Please load data first.")
+            return jsonify({
+                "success": False,
+                "error": "Missing required data. Please load data first."
+            }), 400
         
         # Get the session ID
         session_id = str(uuid.uuid4())
@@ -258,6 +359,13 @@ def initialize_interview():
         # Check if demo mode is requested
         data = request.json
         demo_mode = data.get('demo_mode', False) if data else False
+        
+        # Validate demo_mode is boolean
+        if not isinstance(demo_mode, bool):
+            return jsonify({
+                "success": False,
+                "error": "demo_mode must be a boolean value"
+            }), 400
         
         logger.info("Initializing interview engine")
         
@@ -275,6 +383,10 @@ def initialize_interview():
         # Store the engine in our session-based storage
         interview_engines[session_id] = interview_engine
         
+        # Record the session access time
+        with session_lock:
+            session_last_access[session_id] = datetime.now()
+        
         logger.info("Interview engine initialized successfully")
         
         return jsonify({
@@ -286,43 +398,15 @@ def initialize_interview():
         return jsonify({
             'success': False,
             'error': str(e)
-        })
+        }), 500
 
 @app.route('/api/start_interview', methods=['POST'])
+@validate_session
 def start_interview():
     """Start the interview."""
     try:
         # Get the session ID
         session_id = session.get('session_id')
-        
-        # Check if we have an engine in the session storage
-        if not session_id or session_id not in interview_engines:
-            # If no initialized interview found, check if we have data to create one
-            if 'job_data' not in session or 'company_data' not in session or 'candidate_data' not in session:
-                logger.error("No initialized interview and no data to create one")
-                return jsonify({
-                    'status': 'error',
-                    'error': 'No initialized interview found. Please go back to the dashboard and initialize first.'
-                })
-            
-            # We have data, so let's create a new engine
-            logger.info("Auto-initializing interview engine from session data")
-            session_id = str(uuid.uuid4())
-            session['session_id'] = session_id
-            
-            # Create an interview engine instance
-            interview_engine = InterviewEngine(
-                session['job_data'],
-                session['company_data'],
-                session['candidate_data'],
-                interview_generator
-            )
-            
-            # Generate the interview script
-            interview_engine.generate_interview_script()
-            
-            # Store the engine
-            interview_engines[session_id] = interview_engine
         
         # Get the interview engine
         interview_engine = interview_engines[session_id]
@@ -345,97 +429,72 @@ def start_interview():
                     'status': 'error',
                     'error': 'Interview in invalid state. Please initialize again.'
                 }
-                
+        
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error starting interview: {str(e)}")
         return jsonify({
             'status': 'error',
             'error': str(e)
-        })
+        }), 500
 
 @app.route('/api/process_response', methods=['POST'])
+@validate_json('response')
+@validate_session
 def process_response():
     """Process a response and get the next question."""
     try:
         # Get the request data
         data = request.json
-        if not data or 'response' not in data:
-            return jsonify({
-                'status': 'error',
-                'error': 'Missing response data'
-            })
-        
         response_text = data['response']
         
-        # Log the response for debugging
-        logger.info(f"Processing response: '{response_text[:50]}{'...' if len(response_text) > 50 else ''}'")
+        # Validate response text (basic validation)
+        if len(response_text.strip()) == 0:
+            return jsonify({
+                'status': 'error',
+                'error': 'Response cannot be empty'
+            }), 400
+        
+        # Limit response length to prevent abuse
+        max_length = 10000  # 10k characters should be plenty
+        if len(response_text) > max_length:
+            response_text = response_text[:max_length]
+            logger.warning(f"Response truncated to {max_length} characters")
+        
+        # Log the response for debugging (truncated for privacy)
+        truncated_log = response_text[:30] + '...' if len(response_text) > 30 else response_text
+        logger.info(f"Processing response: '{truncated_log}'")
         
         # Get the session ID
         session_id = session.get('session_id')
-        if not session_id or session_id not in interview_engines:
-            # Try to create a new interview if we have data in session
-            if 'job_data' in session and 'company_data' in session and 'candidate_data' in session:
-                logger.warning("No active interview session, attempting to create one")
-                
-                # Create a new session ID
-                session_id = str(uuid.uuid4())
-                session['session_id'] = session_id
-                
-                # Create and initialize the interview engine
-                interview_engine = InterviewEngine(
-                    session['job_data'],
-                    session['company_data'],
-                    session['candidate_data'],
-                    interview_generator
-                )
-                
-                # Generate the interview script and start
-                interview_engine.generate_interview_script()
-                interview_engine.start_interview()
-                interview_engine.interview_active = True
-                
-                # Store the engine
-                interview_engines[session_id] = interview_engine
-                
-                # Since we just started, instead of processing response,
-                # we'll return the first question
-                current_q = interview_engine.get_current_question()
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Interview restarted. Please repeat your response.',
-                    'question': current_q
-                })
-            else:
-                # No data available to create a new interview
-                logger.error("No active interview session and no data to create one")
-                return jsonify({
-                    'status': 'error',
-                    'error': 'No active interview session. Please initialize an interview first.'
-                })
         
         # Get the interview engine
         interview_engine = interview_engines[session_id]
         
         # Process the response
         result = interview_engine.process_response(response_text)
-        
         return jsonify(result)
+        
+    except KeyError as e:
+        logger.error(f"Missing key in process_response: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': f"Missing required data: {str(e)}"
+        }), 400
     except Exception as e:
         logger.error(f"Error processing response: {str(e)}")
         return jsonify({
             'status': 'error',
             'error': str(e)
-        })
+        }), 500
 
 @app.route('/api/end_interview', methods=['POST'])
+@validate_session
 def end_interview():
     """End the interview and get the final summary."""
     try:
         # Get the session ID
         session_id = session.get('session_id')
-        if not session_id or session_id not in interview_engines:
-            raise ValueError("No active interview found.")
         
         # Get the interview engine
         interview_engine = interview_engines[session_id]
@@ -458,20 +517,15 @@ def end_interview():
         return jsonify({
             'status': 'error',
             'error': str(e)
-        })
+        }), 500
 
 @app.route('/api/visual_summary', methods=['GET'])
+@validate_session
 def get_visual_summary():
     """Get visual summary data for the interview to display in charts and graphs."""
     try:
         # Get the session ID
         session_id = session.get('session_id')
-        
-        if not session_id or session_id not in interview_engines:
-            return jsonify({
-                'status': 'error',
-                'error': 'No active interview session found.'
-            }), 400
         
         # Get the interview engine
         interview_engine = interview_engines[session_id]

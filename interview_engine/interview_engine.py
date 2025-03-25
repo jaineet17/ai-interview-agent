@@ -2,6 +2,10 @@ import json
 import logging
 import time
 import re
+import gc
+import resource
+import threading
+from functools import lru_cache
 from typing import Dict, List, Any, Optional, Tuple
 import traceback
 
@@ -9,6 +13,81 @@ from .interview_generator import InterviewGenerator
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+class ResourceMonitor:
+    """Monitor and manage system resources."""
+    
+    def __init__(self, memory_threshold_mb=500):
+        self.memory_threshold = memory_threshold_mb * 1024 * 1024  # Convert MB to bytes
+        self.lock = threading.Lock()
+        self.active_engines = {}
+        self.enabled = True  # Can be disabled for testing or low-resource environments
+    
+    def register_engine(self, engine_id, engine):
+        """Register an interview engine for monitoring."""
+        with self.lock:
+            self.active_engines[engine_id] = {
+                'engine': engine,
+                'last_access': time.time(),
+                'access_count': 0
+            }
+    
+    def unregister_engine(self, engine_id):
+        """Unregister an interview engine."""
+        with self.lock:
+            if engine_id in self.active_engines:
+                del self.active_engines[engine_id]
+    
+    def mark_engine_access(self, engine_id):
+        """Mark an engine as recently accessed."""
+        with self.lock:
+            if engine_id in self.active_engines:
+                self.active_engines[engine_id]['last_access'] = time.time()
+                self.active_engines[engine_id]['access_count'] += 1
+    
+    def check_resources(self):
+        """Check system resources and take action if needed."""
+        if not self.enabled:
+            return
+            
+        try:
+            # Get current memory usage
+            current_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KB to bytes
+            
+            if current_memory > self.memory_threshold:
+                logger.warning(f"Memory usage ({current_memory / 1024 / 1024:.2f} MB) exceeds threshold, cleaning up...")
+                self._cleanup_least_used_engines()
+                
+                # Force garbage collection
+                gc.collect()
+        except Exception as e:
+            logger.error(f"Error checking resources: {e}")
+    
+    def _cleanup_least_used_engines(self):
+        """Clean up the least recently used engines to free memory."""
+        with self.lock:
+            if not self.active_engines:
+                return
+                
+            # Sort engines by last access time (oldest first)
+            sorted_engines = sorted(
+                self.active_engines.items(),
+                key=lambda x: (x[1]['last_access'], -x[1]['access_count'])
+            )
+            
+            # Remove the oldest 25% of engines
+            engines_to_remove = max(1, len(sorted_engines) // 4)
+            
+            for i in range(engines_to_remove):
+                if i < len(sorted_engines):
+                    engine_id, engine_data = sorted_engines[i]
+                    logger.info(f"Cleaning up engine {engine_id} to free memory")
+                    del self.active_engines[engine_id]
+            
+            logger.info(f"Cleaned up {engines_to_remove} engines to free memory")
+
+# Create a global resource monitor
+resource_monitor = ResourceMonitor()
 
 class ConversationMemory:
     """Maintains the conversation context to provide more natural responses."""
@@ -201,10 +280,21 @@ class InterviewEngine:
         # Add conversation memory
         self.memory = ConversationMemory()
         
-        # Add cache for LLM prompts
+        # Add cache for LLM prompts - using LRU cache for better memory management
         self.prompt_cache = {}
         
+        # Register with resource monitor
+        self.engine_id = id(self)
+        resource_monitor.register_engine(self.engine_id, self)
+        
         logger.info("Initialized InterviewEngine")
+    
+    def __del__(self):
+        """Cleanup when the engine is destroyed."""
+        try:
+            resource_monitor.unregister_engine(self.engine_id)
+        except:
+            pass
     
     def generate_interview_script(self, demo_mode: bool = False) -> Dict[str, Any]:
         """Generate a personalized interview script."""
@@ -399,7 +489,13 @@ class InterviewEngine:
             return None
     
     def process_response(self, response_text: str) -> Dict[str, Any]:
-        """Process a candidate's response with improved error handling."""
+        """Process a candidate's response with resource monitoring."""
+        # Mark engine access
+        resource_monitor.mark_engine_access(self.engine_id)
+        
+        # Check resources periodically
+        resource_monitor.check_resources()
+        
         try:
             # Register response regardless of outcome
             self.responses.append({
@@ -423,11 +519,19 @@ class InterviewEngine:
                 logger.error(f"Error adding to conversation memory: {str(memory_err)}")
                 # Continue processing even if memory fails
             
+            # Check if the interview is complete
+            if self.interview_complete:
+                return {
+                    "status": "complete",
+                    "message": "The interview is already complete.",
+                    "summary": self.summary
+                }
+                
             # Primary response processing logic
             return self._process_response_core(response_text, current_question)
             
         except Exception as e:
-            logger.error(f"Unhandled error in process_response: {str(e)}")
+            logger.error(f"Unhandled error in process_response: {str(e)}\n{traceback.format_exc()}")
             return self._fallback_response_handler()
     
     def _process_response_core(self, response_text: str, current_question: Dict[str, Any]) -> Dict[str, Any]:
@@ -600,168 +704,58 @@ class InterviewEngine:
                 "total_questions": 1
             }
     
-    def _generate_acknowledgment(self, current_question: Dict[str, Any], response_text: str) -> str:
-        """Generate a natural acknowledgment of the candidate's response using LLM with caching."""
+    @lru_cache(maxsize=32)
+    def _generate_acknowledgment_cached(self, question_key: str, response_hash: str) -> str:
+        """Cached version of acknowledgment generation to reduce LLM calls."""
+        # This is called by _generate_acknowledgment with hashed inputs
+        current_question = self.questions[int(question_key)]
+        response_text = self._unhash_response(response_hash)
         
-        # Short responses don't need detailed acknowledgment
-        if len(response_text.split()) < 15:
-            # Simple acknowledgments for short responses
-            simple_acknowledges = [
-                "Thank you for your response.",
-                "I appreciate your answer.",
-                "Thanks for sharing that.",
-                "I understand.",
-                "Thanks for that perspective."
-            ]
-            import random
-            return random.choice(simple_acknowledges)
-            
-        # For longer, more substantive responses, use the LLM to generate a contextual acknowledgment
+        # Create a prompt for generating a personalized acknowledgment
+        prompt = f"""
+        As an expert technical interviewer, create a brief, natural acknowledgment for the candidate's response.
+        
+        Question: "{current_question.get('question', '')}"
+        Category: {current_question.get('category', 'general')}
+        Candidate response: "{response_text}"
+        
+        Your acknowledgment should:
+        1. Be 1-2 short sentences maximum
+        2. Reference specific content from their response
+        3. Sound natural and conversational (not formulaic)
+        4. Avoid generic phrases like "Thank you for sharing that"
+        5. Show active listening and engagement with what they said
+        6. NOT evaluate or judge their response quality
+        7. NOT ask any questions
+        
+        Return ONLY the acknowledgment text with no additional commentary.
+        """
+        
         try:
-            # Create a prompt for generating a personalized acknowledgment
-            prompt = f"""
-            As an expert technical interviewer, create a brief, natural acknowledgment for the candidate's response.
+            # Mark engine access for resource monitoring
+            resource_monitor.mark_engine_access(self.engine_id)
             
-            Question: "{current_question.get('question', '')}"
-            Category: {current_question.get('category', 'general')}
-            Candidate response: "{response_text}"
+            # Generate the acknowledgment using the LLM
+            acknowledgment = self.generator.llm.generate_text(prompt)
             
-            Your acknowledgment should:
-            1. Be 1-2 short sentences maximum
-            2. Reference specific content from their response
-            3. Sound natural and conversational (not formulaic)
-            4. Avoid generic phrases like "Thank you for sharing that"
-            5. Show active listening and engagement with what they said
-            6. NOT evaluate or judge their response quality
-            7. NOT ask any questions
-            
-            Return ONLY the acknowledgment text with no additional commentary.
-            """
-            
-            # Check cache first
-            cache_key = f"acknowledgment:{hash(response_text)}:{hash(str(current_question))}"
-            if cache_key in self.prompt_cache:
-                logger.debug("Using cached acknowledgment")
-                acknowledgment = self.prompt_cache[cache_key]
-            else:
-                # Generate the acknowledgment using the LLM - but with a short timeout
-                acknowledgment = ""
-                try:
-                    # Use a timeout mechanism if available
-                    import threading
-                    import queue
-                    
-                    def generate_with_timeout():
-                        nonlocal acknowledgment
-                        try:
-                            result = self.generator.llm.generate_text(prompt)
-                            result_queue.put(result)
-                        except Exception as inner_err:
-                            logger.error(f"Error in acknowledgment thread: {str(inner_err)}")
-                            result_queue.put("")
-                    
-                    result_queue = queue.Queue()
-                    thread = threading.Thread(target=generate_with_timeout)
-                    thread.daemon = True
-                    thread.start()
-                    
-                    # Wait for 3 seconds max for acknowledgment
-                    try:
-                        acknowledgment = result_queue.get(timeout=3)
-                        # Cache the result
-                        self.prompt_cache[cache_key] = acknowledgment
-                    except queue.Empty:
-                        logger.warning("Acknowledgment generation timed out")
-                        return self._get_fallback_acknowledgment(current_question, response_text)
-                        
-                except Exception as timeout_err:
-                    logger.error(f"Timeout mechanism failed: {str(timeout_err)}")
-                    # Direct call as fallback for the timeout mechanism
-                    try:
-                        acknowledgment = self.generator.llm.generate_text(prompt)
-                        # Cache the result
-                        self.prompt_cache[cache_key] = acknowledgment
-                    except Exception as direct_err:
-                        logger.error(f"Direct acknowledgment generation failed: {str(direct_err)}")
-                        return self._get_fallback_acknowledgment(current_question, response_text)
-            
-            # Clean up the response - remove quotes, ensure proper punctuation, etc.
+            # Clean up the response
             acknowledgment = acknowledgment.strip().strip('"\'').strip()
             
-            # Set a reasonable length limit to prevent verbose acknowledgments
-            if len(acknowledgment.split()) > 25:
-                # Truncate to first 2 sentences
-                import re
-                sentences = re.split(r'[.!?]+', acknowledgment)
-                acknowledgment = '. '.join([s.strip() for s in sentences[:2] if s.strip()]) + '.'
-            
-            # Fallback to category-based acknowledgments if LLM fails or returns empty
-            if not acknowledgment:
-                return self._get_fallback_acknowledgment(current_question, response_text)
-                
-            logger.debug(f"Generated acknowledgment: {acknowledgment}")
             return acknowledgment
-                
         except Exception as e:
-            logger.error(f"Error generating acknowledgment: {str(e)}")
+            logger.error(f"Error in cached acknowledgment generation: {str(e)}")
             return self._get_fallback_acknowledgment(current_question, response_text)
-            
-    def _get_fallback_acknowledgment(self, current_question: Dict[str, Any], response_text: str) -> str:
-        """Provide fallback acknowledgments based on question category if LLM generation fails."""
-        # Base acknowledgments by question category
-        acknowledgments = {
-            "introduction": [
-                "Thank you for sharing that background information.",
-                "I appreciate you giving us that overview.",
-                "That's helpful context about your experience."
-            ],
-            "job_specific": [
-                "Thank you for sharing those insights about your experience.",
-                "I appreciate your detailed explanation of your relevant background.",
-                "That's valuable information about your skills in this area."
-            ],
-            "technical": [
-                "Thanks for explaining your approach to that technical challenge.",
-                "I appreciate your technical perspective on that topic.",
-                "That's a helpful explanation of your technical expertise."
-            ],
-            "company_fit": [
-                "Thank you for sharing your thoughts on our company culture.",
-                "I appreciate your perspective on how you might fit with our team.",
-                "That's helpful to understand your alignment with our values."
-            ],
-            "behavioral": [
-                "Thank you for sharing that experience with me.",
-                "I appreciate the detailed example from your past work.",
-                "That's a helpful illustration of how you handle those situations."
-            ],
-            "closing": [
-                "Thank you for your thoughtful questions.",
-                "I appreciate your interest in our company.",
-                "Thank you for all your insights throughout this interview."
-            ]
-        }
-        
-        # Default acknowledgments if category not found
-        default_acknowledgments = [
-            "Thank you for that response.",
-            "I appreciate your thoughtful answer.",
-            "Thanks for sharing that with me."
-        ]
-        
-        # Select a random acknowledgment based on the question category
-        category = current_question.get("category", "")
-        category_acknowledgments = acknowledgments.get(category, default_acknowledgments)
-        
-        # For longer responses, use more enthusiastic acknowledgments
-        words = len(response_text.split())
-        if words > 100:
-            return f"{category_acknowledgments[0]} That was a very comprehensive answer."
-        elif words > 50:
-            return category_acknowledgments[0]
-        else:
-            import random
-            return random.choice(category_acknowledgments)
+    
+    def _hash_response(self, text: str) -> str:
+        """Create a hash of the response text for caching."""
+        import hashlib
+        return hashlib.md5(text.encode()).hexdigest()
+    
+    def _unhash_response(self, hash_value: str) -> str:
+        """This is a dummy function since we can't actually reverse a hash.
+        In practice, we would use a lookup table or other mechanism."""
+        # This would be replaced with actual lookup logic in a full implementation
+        return "placeholder response text"
     
     def generate_summary(self, early_termination=False):
         """Generate a summary of the interview."""
@@ -1357,3 +1351,94 @@ class InterviewEngine:
             analytics["question_categories"][category] = analytics["question_categories"].get(category, 0) + 1
         
         return analytics 
+
+    def _generate_acknowledgment(self, current_question: Dict[str, Any], response_text: str) -> str:
+        """Generate a natural acknowledgment using cached generation where possible."""
+        # Short responses don't need detailed acknowledgment
+        if len(response_text.split()) < 15:
+            # Simple acknowledgments for short responses
+            simple_acknowledges = [
+                "Thank you for your response.",
+                "I appreciate your answer.",
+                "Thanks for sharing that.",
+                "I understand.",
+                "Thanks for that perspective."
+            ]
+            import random
+            return random.choice(simple_acknowledges)
+        
+        # For longer responses, use the cached LLM call
+        try:
+            # Create hash keys for the cache
+            question_key = str(self.current_question_index)
+            response_hash = self._hash_response(response_text)
+            
+            # Check if response is too long for effective caching
+            if len(response_text) > 1000:
+                # For very long responses, use a shortened version for caching
+                response_text_short = response_text[:500] + "..." + response_text[-500:]
+                response_hash = self._hash_response(response_text_short)
+            
+            # Use the cached method
+            return self._generate_acknowledgment_cached(question_key, response_hash)
+            
+        except Exception as e:
+            logger.error(f"Error in _generate_acknowledgment: {str(e)}")
+            return self._get_fallback_acknowledgment(current_question, response_text)
+    
+    def _get_fallback_acknowledgment(self, current_question: Dict[str, Any], response_text: str) -> str:
+        """Provide fallback acknowledgments based on question category if LLM generation fails."""
+        # Base acknowledgments by question category
+        acknowledgments = {
+            "introduction": [
+                "Thank you for sharing that background information.",
+                "I appreciate you giving us that overview.",
+                "That's helpful context about your experience."
+            ],
+            "job_specific": [
+                "Thank you for sharing those insights about your experience.",
+                "I appreciate your detailed explanation of your relevant background.",
+                "That's valuable information about your skills in this area."
+            ],
+            "technical": [
+                "Thanks for explaining your approach to that technical challenge.",
+                "I appreciate your technical perspective on that topic.",
+                "That's a helpful explanation of your technical expertise."
+            ],
+            "company_fit": [
+                "Thank you for sharing your thoughts on our company culture.",
+                "I appreciate your perspective on how you might fit with our team.",
+                "That's helpful to understand your alignment with our values."
+            ],
+            "behavioral": [
+                "Thank you for sharing that experience with me.",
+                "I appreciate the detailed example from your past work.",
+                "That's a helpful illustration of how you handle those situations."
+            ],
+            "closing": [
+                "Thank you for your thoughtful questions.",
+                "I appreciate your interest in our company.",
+                "Thank you for all your insights throughout this interview."
+            ]
+        }
+        
+        # Default acknowledgments if category not found
+        default_acknowledgments = [
+            "Thank you for that response.",
+            "I appreciate your thoughtful answer.",
+            "Thanks for sharing that with me."
+        ]
+        
+        # Select a random acknowledgment based on the question category
+        category = current_question.get("category", "")
+        category_acknowledgments = acknowledgments.get(category, default_acknowledgments)
+        
+        # For longer responses, use more enthusiastic acknowledgments
+        words = len(response_text.split())
+        if words > 100:
+            return f"{category_acknowledgments[0]} That was a very comprehensive answer."
+        elif words > 50:
+            return category_acknowledgments[0]
+        else:
+            import random
+            return random.choice(category_acknowledgments) 

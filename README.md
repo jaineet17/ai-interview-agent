@@ -13,6 +13,15 @@ The AI Interview Agent is an advanced application that simulates a professional 
 
 Perfect for interview practice, candidate screening, or educational purposes.
 
+## Documentation
+
+For detailed documentation, please refer to the following resources:
+
+- [Main Documentation Hub](DOCUMENTATION.md) - Central reference for all documentation
+- [Solution Narrative](SOLUTION_NARRATIVE.md) - Detailed architecture and implementation explanation
+- [Frontend Integration Guide](FRONTEND_INTEGRATION.md) - Building and integrating the React frontend
+- [Interview Engine Documentation](interview_engine/README.md) - Core interview engine module details
+
 ## Features
 
 - **Dynamic Interview Script Generation**: Creates tailored interview questions based on job requirements and candidate background
