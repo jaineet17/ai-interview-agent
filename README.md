@@ -31,10 +31,12 @@ For detailed documentation, please refer to the following resources:
 - **Candidate Question Handling**: Detects and responds to questions from the candidate during the interview
 - **Duplicate Response Detection**: Identifies repeated answers and prompts for new information
 - **Comprehensive Assessment**: Generates detailed interview summaries with strengths, areas for improvement, and recommendations
+- **Multi-layer Error Resilience**: Progressive fallback mechanisms for handling LLM failures and malformed outputs
+- **Sophisticated JSON Parsing**: Advanced techniques for recovering structured data from imperfect LLM responses
+- **Enhanced LLM Service Integration**: Improved health checks and smart fallbacks for service unavailability
 - **Demo Mode**: Simplified interview experience with fewer questions for quick testing
 - **LLM-based Response Evaluation**: Sophisticated quality assessment of responses beyond simple heuristics
 - **Caching System**: Performance optimization through caching of common prompts
-- **Robust Error Handling**: Graceful recovery from various error conditions
 
 ## Architecture
 
@@ -135,12 +137,34 @@ The system works by:
 - **Voice Processing**: Web Speech API integration for voice input and output
 - **Responsive Design**: Works on both desktop and mobile devices
 
+## Error Handling & Resilience
+
+The system implements multiple layers of error handling and resilience:
+
+1. **LLM Service Integration**
+   - Enhanced health checks for reliable service detection
+   - Smart context-aware fallbacks when services are unavailable
+   - Properly formatted fallback responses for different request types
+
+2. **JSON Processing Resilience**
+   - Multi-stage parsing for handling malformed LLM outputs
+   - Regex-based fixes for common issues (missing quotes, colons, brackets)
+   - Line-by-line inspection and repair capabilities
+   - Structure extraction as a last resort when conventional parsing fails
+
+3. **Interview Flow Continuity**
+   - Graceful recovery from errors at every stage of the interview
+   - Transparent fallbacks that maintain interview quality
+   - State preservation to ensure no data loss during recoveries
+
 ## Recent Enhancements
 
 - **Response Quality Evaluation**: Using LLM-based assessment (1-10 scale) instead of simple heuristics
 - **Performance Optimization**: Implemented caching for prompts to reduce redundant LLM calls
 - **Enhanced Question Detection**: Improved ability to detect when candidates ask questions
-- **Robust Error Handling**: Multiple layers of error recovery to ensure interview continuity
+- **Multi-layer Error Resilience**: Advanced error handling at every level of the system
+- **Robust JSON Parsing**: Sophisticated recovery mechanisms for handling malformed LLM outputs
+- **Improved LLM Integration**: Enhanced health checks and smart fallbacks for service unavailability
 - **Frontend Improvements**: Better handling of UI states and error conditions
 
 ## License

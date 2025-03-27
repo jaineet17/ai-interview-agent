@@ -20,8 +20,8 @@ Recent enhancements to the interview engine include:
 - **LLM-based Response Quality Evaluation**: Using sophisticated assessment techniques to score responses on a 1-10 scale
 - **Prompt Caching**: Reducing redundant LLM calls for better performance
 - **Enhanced Question Detection**: Better ability to recognize when candidates ask questions
-- **Robust Error Handling**: Multiple layers of recovery to ensure interview continuity
-- **Fallback Responses**: Graceful degradation when problems occur
+- **Multi-layer Fault Tolerance**: Multiple redundant fallback systems for JSON parsing and LLM connectivity
+- **Advanced Error Recovery**: Comprehensive error handling with specific fixes for common LLM output issues
 
 ### 2. Document Processing
 
@@ -85,12 +85,36 @@ This approach produces more nuanced evaluations of response quality, leading to 
 
 ### Error Handling Strategy
 
-The system implements a multi-layer approach to error handling:
+The system implements a comprehensive multi-layer approach to error handling:
 
 1. **Method-level try/except**: Each critical method has specific error handlers
 2. **Process-level recovery**: The main response processor has fallback paths
 3. **API-level validation**: Input/output validation at the API boundary
 4. **Frontend error handling**: UI-level error display and recovery
+5. **LLM Service Resilience**: Enhanced health checks and connection reliability
+6. **Multi-stage JSON Parsing**: Progressive approaches to handle malformed JSON
+
+The new system provides multiple fallback mechanisms:
+```python
+# Example of multi-layer JSON parsing approach
+try:
+    # Method 1: Use regular expressions to fix common issues
+    fixed_json = self._fix_advanced_json_issues(json_str)
+    summary = json.loads(fixed_json)
+    return self._validate_summary(summary, candidate_data, job_data)
+except Exception:
+    # Method 2: Try line-by-line fixing
+    fixed_json = self._fix_json_line_by_line(json_str)
+    summary = json.loads(fixed_json)
+    return self._validate_summary(summary, candidate_data, job_data)
+except Exception:
+    # Method 3: Brute force structure extraction
+    summary = self._extract_json_structure(json_str)
+    return self._validate_summary(summary, candidate_data, job_data)
+except Exception:
+    # Last resort: Use a fallback summary
+    return self._create_fallback_summary(candidate_data, job_data)
+```
 
 ### Caching System
 
@@ -100,6 +124,15 @@ To improve performance, the system implements caching for:
 - Candidate question detection
 
 This significantly reduces the number of LLM calls and improves response times.
+
+### LLM Service Reliability
+
+The system now includes enhanced LLM service handling:
+
+1. **Improved Health Checks**: Better handling of various response formats from LLM services
+2. **Graceful Degradation**: Intelligent fallbacks when services are unavailable
+3. **Context-Aware Fallbacks**: Fallback responses tailored to the specific request type
+4. **JSON-aware Responses**: Fallback responses maintain proper JSON format when needed
 
 ## Future Enhancements
 
@@ -123,7 +156,19 @@ Planned improvements include:
 
 **Problem**: LLM calls sometimes failed or timed out, disrupting the interview flow.
 
-**Solution**: Implemented a robust error handling system with fallbacks at multiple levels, ensuring the interview can continue even when components fail.
+**Solution**: Implemented a comprehensive error handling system with multiple fallback mechanisms at different layers, ensuring the interview can continue even when components fail.
+
+### Challenge: Malformed JSON Parsing
+
+**Problem**: LLMs often generate JSON with syntax errors that standard parsers can't handle.
+
+**Solution**: Developed a sophisticated multi-stage JSON parsing system with specific fixes for common issues like missing quotes, unclosed brackets, and unquoted values.
+
+### Challenge: Ollama Service Integration
+
+**Problem**: The Ollama API could respond in different formats or be temporarily unavailable.
+
+**Solution**: Enhanced the health check system to handle various response formats and implemented tailored fallback responses that match the expected output structure.
 
 ### Challenge: Performance Optimization
 
@@ -139,4 +184,4 @@ Planned improvements include:
 
 ## Conclusion
 
-The AI Interview Agent demonstrates how LLMs can be effectively applied to create realistic, adaptive interview experiences. The recent enhancements have significantly improved response quality assessment, error handling, and overall system robustness, making it a valuable tool for interview practice and candidate screening. 
+The AI Interview Agent demonstrates how LLMs can be effectively applied to create realistic, adaptive interview experiences. The recent enhancements have significantly improved response quality assessment, error handling, and overall system robustness, making it a valuable tool for interview practice and candidate screening. The new multi-layer fallback systems ensure a smooth user experience even when facing technical challenges with LLM services or output parsing. 

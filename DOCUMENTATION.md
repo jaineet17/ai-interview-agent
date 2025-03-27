@@ -60,12 +60,25 @@ python web_app.py
 
 The heart of the system that manages interview flow. See [Interview Engine Documentation](interview_engine/README.md) for details.
 
+Recent enhancements include:
+- Multi-stage JSON parsing for handling malformed LLM outputs
+- Improved parameter validation and error recovery
+- Enhanced summary generation with progressive fallbacks
+
 ### Document Processor
 
 Handles parsing and extracting information from:
 - Job descriptions
 - Company profiles
 - Candidate resumes
+
+### LLM Service
+
+Provides integration with Large Language Models:
+- Improved health checks and connection reliability
+- Smart fallbacks for service unavailability
+- Context-aware response generation for different request types
+- JSON-aware fallback responses
 
 ### Frontend
 
@@ -83,6 +96,7 @@ Flask-based backend API that:
 - Manages API endpoints
 - Handles session management
 - Processes file uploads
+- Provides enhanced error handling and recovery
 
 ## Common Tasks
 
@@ -132,13 +146,37 @@ The system supports multiple LLM providers:
 - Anthropic: Requires `ANTHROPIC_API_KEY`
 - Ollama: Requires `OLLAMA_API_BASE` (default: http://localhost:11434)
 
+## Error Handling and Resilience
+
+The system includes multiple layers of error handling:
+
+1. **LLM Service Integration**
+   - Health checks detect available models and service status
+   - Fallback responses maintain expected formats
+   - Context-aware recovery when services are unavailable
+
+2. **JSON Processing**
+   - Multi-stage parsing approaches for malformed LLM outputs
+   - Regex-based fixes for common issues (missing quotes, unbalanced brackets)
+   - Line-by-line inspection and repair
+   - Brute-force structure extraction when all else fails
+
+3. **API Resilience**
+   - Request validation with helpful error messages
+   - Graceful handling of missing or malformed inputs
+   - Session state preservation during errors
+
 ## Troubleshooting
 
 ### Common Issues
 
 1. **No frontend content displayed**: Make sure to build the frontend using the build.sh script
 2. **LLM connection errors**: Check if the configured LLM provider is accessible
+   - For Ollama, ensure it's running locally with `ollama serve`
+   - Verify model availability with `ollama list`
 3. **Session expiry issues**: Check the session timeout configuration in web_app.py
+4. **JSON parsing errors**: These are now handled automatically by the multi-layer parsing system
+5. **Interview summary generation failures**: Check the application logs for specific parsing errors
 
 ## Contributing
 
