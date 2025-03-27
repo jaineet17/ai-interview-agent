@@ -83,18 +83,34 @@ app = Flask(__name__, static_folder='frontend/dist')
 app.secret_key = os.getenv("FLASK_SECRET_KEY", str(uuid.uuid4()))
 app.config['SESSION_TYPE'] = 'filesystem'
 
-# Set session globals for validators
-set_session_globals(session_lock, SESSION_TIMEOUT, interview_engines, session_last_access)
+# Initialize components with error handling
+try:
+    doc_processor = DocumentProcessor()
+    llm_adapter = LLMAdapter()
+    interview_generator = InterviewGenerator(llm_adapter)
+    
+    # Initialize InterviewApp
+    interview_app = InterviewApp()
+    
+    # Session storage
+    interview_engines = {}
+    
+    # Set session globals for validators
+    set_session_globals(session_lock, SESSION_TIMEOUT, interview_engines, session_last_access)
+    
+    logger.info("Initializing AI Interview Agent")
+except Exception as e:
+    logger.error(f"Error initializing components: {e}")
+    raise
 
-# Start the cleanup task when the app starts
-@app.before_first_request
-def start_session_cleanup():
-    session_cleanup_task()
-
-# Start the resource monitor when the app starts
-@app.before_first_request
-def start_resource_monitor():
-    resource_monitor_task()
+# Start the cleanup task and resource monitor when app starts
+@app.before_request
+def before_first_request():
+    """Run tasks before first request (replaces deprecated before_first_request)"""
+    if not hasattr(app, 'before_first_request_complete'):
+        app.before_first_request_complete = True
+        session_cleanup_task()
+        resource_monitor_task()
 
 # Add this middleware to track session activity
 @app.before_request
@@ -110,23 +126,6 @@ CORS(app)
 # Add mime types for frontend files
 mimetypes.add_type('application/javascript', '.js')
 mimetypes.add_type('text/css', '.css')
-
-# Initialize components with error handling
-try:
-    doc_processor = DocumentProcessor()
-    llm_adapter = LLMAdapter()
-    interview_generator = InterviewGenerator(llm_adapter)
-    
-    # Initialize InterviewApp
-    interview_app = InterviewApp()
-    
-    # Session storage
-    interview_engines = {}
-    
-    logger.info("Initializing AI Interview Agent")
-except Exception as e:
-    logger.error(f"Error initializing components: {e}")
-    raise
 
 # Helper function to get interview engine with session validation
 def get_interview_engine(session_id):
@@ -303,7 +302,6 @@ def upload_document(doc_type):
         return jsonify({"error": f"Upload failed: {str(e)}"}), 500
 
 @app.route('/api/load_sample_data', methods=['POST'])
-@validate_json()
 def load_sample_data():
     """Load sample data for demonstration."""
     try:

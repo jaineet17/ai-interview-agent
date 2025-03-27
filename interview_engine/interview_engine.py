@@ -8,6 +8,8 @@ import threading
 from functools import lru_cache
 from typing import Dict, List, Any, Optional, Tuple
 import traceback
+import psutil
+import sys
 
 from .interview_generator import InterviewGenerator
 
@@ -51,11 +53,28 @@ class ResourceMonitor:
             return
             
         try:
-            # Get current memory usage
-            current_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KB to bytes
+            # Get current memory usage in a platform-independent way
+            process = psutil.Process()
+            current_memory = process.memory_info().rss  # Resident Set Size in bytes
+            
+            # On some systems, resource.getrusage may provide more accurate information
+            try:
+                rusage_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                # On macOS, ru_maxrss is in bytes, on Linux it's in KB
+                if 'darwin' in sys.platform:
+                    rusage_memory *= 1024  # Convert KB to bytes
+                
+                # Log both measurements for debugging
+                logger.debug(f"Memory usage (psutil): {current_memory / 1024 / 1024:.2f} MB, (rusage): {rusage_memory / 1024 / 1024:.2f} MB")
+                
+                # Use the smaller value to avoid false positives
+                current_memory = min(current_memory, rusage_memory)
+            except:
+                # If rusage fails, continue with psutil measurement
+                logger.debug(f"Memory usage (psutil only): {current_memory / 1024 / 1024:.2f} MB")
             
             if current_memory > self.memory_threshold:
-                logger.warning(f"Memory usage ({current_memory / 1024 / 1024:.2f} MB) exceeds threshold, cleaning up...")
+                logger.warning(f"Memory usage ({current_memory / 1024 / 1024:.2f} MB) exceeds threshold ({self.memory_threshold / 1024 / 1024:.2f} MB), cleaning up...")
                 self._cleanup_least_used_engines()
                 
                 # Force garbage collection
@@ -794,10 +813,10 @@ class InterviewEngine:
             # Generate summary
             logger.info("Generating interview summary with memory insights")
             summary = self.generator.generate_interview_summary(
-                prompt,
                 self.job_data,
-                self.company_data,
+                self.company_data, 
                 self.candidate_data,
+                self.responses,
                 early_termination
             )
             
