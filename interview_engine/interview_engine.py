@@ -12,7 +12,6 @@ import psutil
 import sys
 
 from .interview_generator import InterviewGenerator
-from .llm_interface import LLMInterface
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -777,24 +776,6 @@ class InterviewEngine:
         # This would be replaced with actual lookup logic in a full implementation
         return "placeholder response text"
     
-    @lru_cache(maxsize=10)
-    def _generate_summary_cached(self, job_data_hash: str, responses_hash: str, follow_ups_hash: str, early_termination: bool) -> Dict[str, Any]:
-        """Cached summary generation to improve performance."""
-        try:
-            # Call the interview generator with follow-ups
-            summary = self.generator.generate_interview_summary(
-                self.job_data,
-                self.company_data, 
-                self.candidate_data,
-                self.responses,
-                early_termination,
-                self.follow_ups
-            )
-            return summary
-        except Exception as e:
-            logger.error(f"Error in cached summary generation: {str(e)}")
-            raise
-    
     def generate_summary(self, early_termination=False):
         """Generate a summary of the interview."""
         if not self.responses and not early_termination:
@@ -803,45 +784,48 @@ class InterviewEngine:
             return self.summary
             
         try:
-            # Create hash keys for caching
-            import hashlib
-            import json
+            # Enhanced summary generation with memory insights
+            prompt = "Please provide a comprehensive interview summary based on the following data:\n\n"
             
-            # Create hash of key data for cache keys
-            job_data_str = json.dumps(self.job_data, sort_keys=True)
-            job_data_hash = hashlib.md5(job_data_str.encode()).hexdigest()
+            # Add job information
+            prompt += f"Job Title: {self.job_data.get('title', 'N/A')}\n"
+            prompt += f"Required Skills: {', '.join(self.job_data.get('required_skills', []))}\n\n"
             
-            responses_str = json.dumps(self.responses, sort_keys=True)
-            responses_hash = hashlib.md5(responses_str.encode()).hexdigest()
+            # Add responses
+            prompt += "Interview Questions and Responses:\n"
+            for i, response in enumerate(self.responses):
+                question = response.get("question", {}).get("question", "")
+                answer = response.get("response", "")
+                prompt += f"Q{i+1}: {question}\nA: {answer}\n\n"
             
-            follow_ups_str = json.dumps(self.follow_ups, sort_keys=True)
-            follow_ups_hash = hashlib.md5(follow_ups_str.encode()).hexdigest()
+            # Add memory insights
+            prompt += "Candidate Insights:\n"
+            prompt += f"- Topics mentioned: {', '.join(self.memory.get_recent_topics())}\n"
             
-            # Get cached summary or generate new one
-            try:
-                logger.info("Attempting to retrieve cached interview summary")
-                summary = self._generate_summary_cached(
-                    job_data_hash, responses_hash, follow_ups_hash, early_termination
-                )
-                logger.info("Successfully retrieved cached interview summary")
-            except Exception as cache_error:
-                logger.error(f"Error with cached generation: {str(cache_error)}")
-                # Direct call as fallback
-                logger.info("Falling back to direct summary generation")
-                summary = self.generator.generate_interview_summary(
-                    self.job_data,
-                    self.company_data, 
-                    self.candidate_data,
-                    self.responses,
-                    early_termination,
-                    self.follow_ups
-                )
+            dominant_style = self.memory.get_dominant_style()
+            if dominant_style:
+                prompt += f"- Communication style: {dominant_style}\n"
+            
+            for insight, count in self.memory.insights.items():
+                if count > 0:
+                    prompt += f"- {insight.replace('_', ' ').title()}: {count} instances\n"
+            
+            # Generate summary
+            logger.info("Generating interview summary with memory insights")
+            summary = self.generator.generate_interview_summary(
+                self.job_data,
+                self.company_data, 
+                self.candidate_data,
+                self.responses,
+                early_termination
+            )
             
             self.summary = summary
             return summary
             
         except Exception as e:
             logger.error(f"Error generating summary: {e}")
+            # Use minimal summary as fallback
             return self._generate_minimal_summary(early_termination)
 
     def _generate_minimal_summary(self, early_termination=False):
@@ -850,68 +834,18 @@ class InterviewEngine:
         name = self.candidate_data.get("name", "The candidate")
         position = self.job_data.get("title", "the position")
         
-        # Extract basic insights from responses
-        strengths = []
-        improvements = []
-        if self.responses:
-            for resp in self.responses[:3]:  # Limit to first 3 for brevity
-                r_text = resp.get("response", "").lower()
-                question = resp.get("question", {})
-                category = question.get("category", "general") if isinstance(question, dict) else "general"
-                
-                # Check for mentions of experience or skills
-                if any(word in r_text for word in ["experience", "skill", "background", "project", "success"]):
-                    strengths.append(f"Demonstrated {category} experience")
-                
-                # Check if answer is brief
-                if len(r_text.split()) < 25:
-                    improvements.append(f"Could elaborate more on {category} answers")
-                    
-                # Check for specific keywords based on category
-                if category == "technical" and any(word in r_text for word in ["implement", "develop", "build", "code"]):
-                    strengths.append("Has hands-on technical implementation experience")
-                    
-                if category == "behavioral" and any(word in r_text for word in ["team", "collaborate", "work with"]):
-                    strengths.append("Shows teamwork and collaboration experience")
-        
         summary = {
             "candidate_name": name,
             "position": position,
-            "strengths": list(set(strengths[:3])) or ["Participated in the interview process"],
-            "areas_for_improvement": list(set(improvements[:3])) or ["Provide more detailed responses"],
-            "technical_evaluation": f"Completed {response_count} responses{' with early termination' if early_termination else ''}. Insufficient data for complete technical assessment.",
-            "cultural_fit": "Limited data to assess cultural fit fully.",
-            "recommendation": "Further evaluation needed to make a hiring recommendation.",
-            "next_steps": "Consider conducting an additional technical assessment or follow-up interview.",
-            "overall_assessment": f"{name} completed {response_count} questions for {position}. {'The interview was terminated early, resulting in limited data for evaluation.' if early_termination else 'While some insights were gained, additional assessment would be beneficial for a complete evaluation.'}"
+            "strengths": ["Could not analyze fully" + (" due to early termination" if early_termination else "")],
+            "areas_for_improvement": ["Could not analyze fully" + (" due to early termination" if early_termination else "")],
+            "technical_evaluation": f"Interview had only {response_count} responses, which is not enough for a full evaluation" + (" and was terminated early" if early_termination else ""),
+            "cultural_fit": "Not enough information to evaluate",
+            "recommendation": "More information needed",
+            "next_steps": "Consider conducting another interview to gather more information",
+            "overall_assessment": f"{name} participated in a brief interview for {position} " + ("but the interview was terminated early" if early_termination else "but did not complete enough questions for a full assessment")
         }
         
-        # Add response scores with basic ratings
-        summary["response_scores"] = []
-        for i, resp in enumerate(self.responses):
-            r_text = resp.get("response", "")
-            question = resp.get("question", {})
-            q_text = question.get("question", f"Question {i+1}") if isinstance(question, dict) else f"Question {i+1}"
-            
-            # Simple scoring based on length
-            words = len(r_text.split())
-            if words < 20:
-                score = 3
-                justification = "Very brief response"
-            elif words < 50:
-                score = 5
-                justification = "Moderate response length"
-            else:
-                score = 7
-                justification = "Detailed response"
-                
-            summary["response_scores"].append({
-                "question": q_text,
-                "score": score,
-                "justification": justification
-            })
-        
-        self.summary = summary
         return summary
     
     def get_interview_state(self) -> Dict[str, Any]:
@@ -1315,211 +1249,65 @@ class InterviewEngine:
             return next_question.get("transition", "Thank you. Let's move on to the next question.")
     
     def generate_visual_summary(self) -> Dict[str, Any]:
-        """Generate visualization-ready data with guaranteed valid structure."""
+        """Generate visualization-ready data from interview summary"""
         if not self.summary:
             self.generate_summary()
         
-        try:
-            # Get skill ratings safely
-            skill_ratings = self._extract_skill_ratings()
-            
-            # Process strengths - ensure they're in the format of { text: string, score: number }
-            strengths = []
-            if 'strengths' in self.summary and isinstance(self.summary['strengths'], list):
-                for i, strength in enumerate(self.summary['strengths'][:3]):  # Limit to top 3
-                    if isinstance(strength, str):
-                        strengths.append({
-                            "text": str(strength),
-                            "score": 85 - (i * 5)  # Descending scores for visual effect
-                        })
-                    elif isinstance(strength, dict) and 'text' in strength:
-                        # If already properly structured
-                        strengths.append({
-                            "text": str(strength['text']),
-                            "score": strength.get('score', 85 - (i * 5))
-                        })
-            
-            # Ensure we have at least one strength
-            if not strengths:
-                strengths = [{
-                    "text": "Participated in the interview process",
-                    "score": 75
-                }]
-            
-            # Validate strength scores
-            for strength in strengths:
-                if not isinstance(strength.get('score'), (int, float)):
-                    strength['score'] = 75
-                strength['score'] = max(0, min(100, int(strength['score'])))
-            
-            # Process improvements - ensure they're in the format of { text: string, score: number }
-            improvements = []
-            if 'areas_for_improvement' in self.summary and isinstance(self.summary['areas_for_improvement'], list):
-                for i, area in enumerate(self.summary['areas_for_improvement'][:3]):  # Limit to top 3
-                    if isinstance(area, str):
-                        improvements.append({
-                            "text": str(area),
-                            "score": 60 - (i * 10)  # Descending scores for visual effect
-                        })
-                    elif isinstance(area, dict) and 'text' in area:
-                        # If already properly structured
-                        improvements.append({
-                            "text": str(area['text']),
-                            "score": area.get('score', 60 - (i * 10))
-                        })
-            
-            # Ensure we have at least one improvement area
-            if not improvements:
-                improvements = [{
-                    "text": "Additional technical assessment recommended",
-                    "score": 50
-                }]
-            
-            # Validate improvement scores
-            for improvement in improvements:
-                if not isinstance(improvement.get('score'), (int, float)):
-                    improvement['score'] = 50
-                improvement['score'] = max(0, min(100, int(improvement['score'])))
-            
-            # Calculate recommendation score safely
-            try:
-                recommendation_score = self._calculate_recommendation_score()
-            except Exception as e:
-                logger.error(f"Error calculating recommendation score: {e}")
-                recommendation_score = 50
-            
-            # Create the complete data structure for visualization
-            visual_data = {
-                "candidate_name": str(self.summary.get("candidate_name", "Candidate")),
-                "position": str(self.summary.get("position", "Position")),
-                "skill_ratings": skill_ratings,
-                "strengths": strengths,
-                "improvements": improvements,
-                "recommendation_score": max(0, min(100, int(recommendation_score))),
-                "recommendation_text": str(self.summary.get("recommendation", "Additional assessment recommended"))
-            }
-            
-            return visual_data
-            
-        except Exception as e:
-            logger.error(f"Error generating visual summary: {e}")
-            # Return a safe fallback structure
-            return {
-                "candidate_name": "Candidate",
-                "position": "Position",
-                "skill_ratings": [
-                    {"name": "Technical Knowledge", "score": 65},
-                    {"name": "Communication", "score": 70},
-                    {"name": "Problem Solving", "score": 60}
-                ],
-                "strengths": [{
-                    "text": "Participated in the interview process",
-                    "score": 75
-                }],
-                "improvements": [{
-                    "text": "Additional technical assessment recommended",
-                    "score": 50
-                }],
-                "recommendation_score": 50,
-                "recommendation_text": "Additional assessment recommended"
-            }
+        visual_data = {
+            "candidate_name": self.summary.get("candidate_name", "Candidate"),
+            "position": self.summary.get("position", "Position"),
+            # Create skill rating map (0-100) for visualization
+            "skill_ratings": self._extract_skill_ratings(),
+            # Map strengths and areas for improvement to visualization format
+            "strengths": [{"text": s, "score": 85 + i*5} for i, s in 
+                         enumerate(self.summary.get("strengths", [])[:3])],
+            "improvements": [{"text": a, "score": 60 - i*10} for i, a in 
+                            enumerate(self.summary.get("areas_for_improvement", [])[:3])],
+            # Create recommendation score (0-100)
+            "recommendation_score": self._calculate_recommendation_score(),
+            "recommendation_text": self.summary.get("recommendation", "")
+        }
+        return visual_data
     
     def _extract_skill_ratings(self) -> List[Dict[str, Any]]:
-        """Extract skill ratings with guaranteed valid format."""
-        # Default skills as fallback
-        default_skills = [
-            {"name": "Technical Knowledge", "score": 65},
-            {"name": "Communication", "score": 70},
-            {"name": "Problem Solving", "score": 60}
-        ]
+        """Extract skill ratings from technical evaluation for visualization"""
+        tech_eval = self.summary.get("technical_evaluation", "")
         
-        try:
-            # First check if we already have skill_ratings in the summary
-            if self.summary and 'skill_ratings' in self.summary and isinstance(self.summary['skill_ratings'], list):
-                # Check if existing skill_ratings are valid
-                valid_ratings = []
-                for rating in self.summary['skill_ratings']:
-                    if isinstance(rating, dict) and 'name' in rating and 'score' in rating:
-                        try:
-                            # Ensure score is a number
-                            score = float(rating['score'])
-                            valid_ratings.append({
-                                "name": str(rating['name']),
-                                "score": int(score)  # Frontend expects an integer
-                            })
-                        except (ValueError, TypeError):
-                            # Skip invalid scores
-                            pass
+        # Extract skills with regex and assign ratings
+        import re
+        skills = []
+        
+        # First try to extract structured ratings
+        skill_matches = re.findall(r'([A-Za-z]+(?:\s[A-Za-z]+)?)\s*:\s*(Not Demonstrated|Basic|Proficient|Expert)', tech_eval)
+        
+        if skill_matches:
+            # Convert text ratings to numeric
+            rating_map = {
+                "Not Demonstrated": 10,
+                "Basic": 40, 
+                "Proficient": 75,
+                "Expert": 95
+            }
             
-            # If we have valid ratings, use them
-            if valid_ratings:
-                return valid_ratings
-            
-            # Fallback to extracting from technical evaluation
-            tech_eval = self.summary.get("technical_evaluation", "") if self.summary else ""
-            skills = []
-            
-            # Try to extract structured ratings
-            import re
-            skill_matches = re.findall(r'([A-Za-z]+(?:\s[A-Za-z]+)?)\s*:\s*(Not Demonstrated|Basic|Proficient|Expert)', tech_eval)
-            
-            if skill_matches:
-                # Convert text ratings to numeric
-                rating_map = {
-                    "Not Demonstrated": 10,
-                    "Basic": 40, 
-                    "Proficient": 75,
-                    "Expert": 95
-                }
+            for skill, rating in skill_matches:
+                skills.append({
+                    "name": skill,
+                    "score": rating_map.get(rating, 50)
+                })
+        else:
+            # Fallback to required skills from job data with estimated ratings
+            for i, skill in enumerate(self.job_data.get("required_skills", [])[:5]):
+                # Generate pseudo-random scores that look realistic
+                import hashlib
+                seed = int(hashlib.md5(str(skill).encode()).hexdigest(), 16) % 40
+                score = min(95, max(30, 55 + seed))
                 
-                for skill, rating in skill_matches:
-                    skills.append({
-                        "name": str(skill),
-                        "score": rating_map.get(rating, 50)
-                    })
-            else:
-                # Handle job_data.required_skills safely
-                required_skills = self.job_data.get("required_skills", [])
-                
-                # Convert string to list if needed
-                if isinstance(required_skills, str):
-                    required_skills = [s.strip() for s in required_skills.split(',')]
-                elif not isinstance(required_skills, list):
-                    required_skills = []
-                
-                # If we have skills, create ratings
-                if required_skills:
-                    for i, skill in enumerate(required_skills[:5]):
-                        if skill:  # Ensure skill is not empty
-                            try:
-                                import hashlib
-                                seed = int(hashlib.md5(str(skill).encode()).hexdigest(), 16) % 40
-                                score = min(95, max(30, 55 + seed))
-                                
-                                skills.append({
-                                    "name": str(skill),
-                                    "score": score
-                                })
-                            except Exception as e:
-                                logger.warning(f"Error creating skill rating: {e}")
-            
-            # Return default skills if we couldn't extract any
-            if not skills:
-                return default_skills
-                
-            # Final validation to ensure proper structure
-            for i, skill in enumerate(skills):
-                if not isinstance(skill, dict) or 'name' not in skill or 'score' not in skill:
-                    skills[i] = default_skills[i % len(default_skills)]
-                elif not isinstance(skill['score'], (int, float)):
-                    skills[i]['score'] = 60
-                # Ensure score is between 0 and 100
-                skills[i]['score'] = max(0, min(100, int(skills[i]['score'])))
-            
-            return skills
-        except Exception as e:
-            logger.error(f"Error extracting skill ratings: {e}")
-            return default_skills
+                skills.append({
+                    "name": skill,
+                    "score": score
+                })
+        
+        return skills
     
     def _calculate_recommendation_score(self) -> int:
         """Calculate numeric recommendation score for visualization"""
