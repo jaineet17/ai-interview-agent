@@ -1,19 +1,23 @@
-# AI Interview Agent Documentation
+# AI Interview Agent: Documentation
 
-This document serves as the central hub for all documentation related to the AI Interview Agent. It provides links to all specialized documentation and offers a comprehensive overview of the system.
+## Table of Contents
+1. [Overview](#overview)
+2. [System Architecture](#system-architecture)
+3. [Component Descriptions](#component-descriptions)
+4. [Setup and Configuration](#setup-and-configuration)
+5. [Developer Guide](#developer-guide)
+6. [Error Handling](#error-handling)
+7. [User Guide](#user-guide)
+8. [Recent Improvements](#recent-improvements)
+9. [Troubleshooting](#troubleshooting)
 
-## Documentation Overview
+## Overview
 
-| Document | Description |
-|----------|-------------|
-| [README.md](README.md) | Main project overview, features, and quick start |
-| [Solution Narrative](SOLUTION_NARRATIVE.md) | Detailed explanation of the solution architecture and implementation |
-| [Frontend Integration](FRONTEND_INTEGRATION.md) | Guide for building and integrating the React frontend |
-| [Interview Engine](interview_engine/README.md) | Documentation for the core interview engine module |
+The AI Interview Agent is a sophisticated application that simulates realistic job interviews using Large Language Models (LLMs). It creates personalized interview experiences by generating questions based on job descriptions and candidate profiles, maintaining natural conversational flow, and providing detailed feedback.
 
 ## System Architecture
 
-The AI Interview Agent is structured as follows:
+The system follows a modular architecture:
 
 ```
 AI Interview Agent
@@ -33,105 +37,46 @@ AI Interview Agent
 └── requirements.txt             # Python dependencies
 ```
 
-## Quick Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/jaineet17/ai-interview-agent.git
-cd ai-interview-agent
-
-# Set up virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Build the frontend
-bash build.sh
-
-# Run the application
-python web_app.py
-```
-
-## Core Components
+## Component Descriptions
 
 ### Interview Engine
 
-The heart of the system that manages interview flow. See [Interview Engine Documentation](interview_engine/README.md) for details.
-
-Recent enhancements include:
-- Multi-stage JSON parsing for handling malformed LLM outputs
-- Improved parameter validation and error recovery
-- Enhanced summary generation with progressive fallbacks
+The core interview engine manages the entire interview flow including:
+- Question generation and sequencing
+- Response analysis and follow-up determination
+- Conversation memory and context tracking
+- Summary and assessment generation
 
 ### Document Processor
 
-Handles parsing and extracting information from:
+Handles parsing and information extraction from:
 - Job descriptions
 - Company profiles
 - Candidate resumes
 
-### LLM Service
-
-Provides integration with Large Language Models:
-- Improved health checks and connection reliability
-- Smart fallbacks for service unavailability
-- Context-aware response generation for different request types
-- JSON-aware fallback responses
-
 ### Frontend
 
-React-based interface with:
-- Dashboard for document upload
-- Interview interface with voice capabilities
-- Summary and assessment view
+React-based user interface with:
+- Dashboard for setup and initialization
+- Interview interface with chat and voice controls
+- Summary view with assessment and visualization
 
-See [Frontend Integration Guide](FRONTEND_INTEGRATION.md) for building and development instructions.
+## Setup and Configuration
 
-### Web Application
+### Prerequisites
+- Python 3.8+
+- Node.js and npm
+- Ollama or other LLM provider
 
-Flask-based backend API that:
-- Serves the frontend
-- Manages API endpoints
-- Handles session management
-- Processes file uploads
-- Provides enhanced error handling and recovery
+### Installation Steps
 
-## Common Tasks
-
-### Setting Up for Development
-
-1. Follow the installation instructions above
-2. For frontend development, run:
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-3. In a separate terminal, run the backend:
-   ```bash
-   python web_app.py
-   ```
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run specific test module
-pytest tests/test_interview_engine.py
-```
-
-### Deploying to Production
-
-See the [Frontend Integration Guide](FRONTEND_INTEGRATION.md) for production deployment instructions.
-
-## Configuration
+1. Clone the repository
+2. Set up a Python virtual environment
+3. Install dependencies: `pip install -r requirements.txt`
+4. Configure environment variables in `.env`
+5. Start the application: `python web_app.py`
 
 ### Environment Variables
-
-Create a `.env` file in the project root with the following variables:
 
 ```
 LLM_PROVIDER=ollama
@@ -139,51 +84,125 @@ OLLAMA_MODEL=llama3
 FLASK_SECRET_KEY=your_secret_key
 ```
 
-### LLM Configuration
+## Developer Guide
 
-The system supports multiple LLM providers:
-- OpenAI: Requires `OPENAI_API_KEY`
-- Anthropic: Requires `ANTHROPIC_API_KEY`
-- Ollama: Requires `OLLAMA_API_BASE` (default: http://localhost:11434)
+### Development Environment
 
-## Error Handling and Resilience
+For development with hot reloading:
 
-The system includes multiple layers of error handling:
+```bash
+# Start development servers with hot reloading
+./start-dev.sh
+```
 
-1. **LLM Service Integration**
-   - Health checks detect available models and service status
-   - Fallback responses maintain expected formats
-   - Context-aware recovery when services are unavailable
+This script will:
+1. Start the Flask backend with auto-reload
+2. Run the Vite development server with HMR
+3. Monitor both for changes
 
-2. **JSON Processing**
-   - Multi-stage parsing approaches for malformed LLM outputs
-   - Regex-based fixes for common issues (missing quotes, unbalanced brackets)
-   - Line-by-line inspection and repair
-   - Brute-force structure extraction when all else fails
+### Code Structure
 
-3. **API Resilience**
-   - Request validation with helpful error messages
-   - Graceful handling of missing or malformed inputs
-   - Session state preservation during errors
+- **Frontend**: React with TypeScript and Material UI
+- **Backend**: Flask API with Blueprints
+- **Interview Engine**: Core Python modules
+
+### Building the Frontend
+
+```bash
+cd frontend
+npm run build
+```
+
+## Error Handling
+
+The system implements comprehensive error handling:
+
+### Backend Error Handling
+- **Multi-layer validation** in data processing
+- **Try/except blocks** around critical operations
+- **Fallback responses** for error scenarios
+- **Defensive programming** with default values
+
+### Frontend Error Handling
+- **Optional chaining** for accessing nested properties
+- **Conditional rendering** based on data availability
+- **Type validation** before rendering complex objects
+- **Fallback UI components** when data is missing
+
+### Visualization Error Handling
+- **Data structure validation** before rendering charts
+- **Default values** for missing properties
+- **Truncation handling** for text overflow
+- **Tooltip fallbacks** for inaccessible content
+
+## User Guide
+
+### Starting an Interview
+1. Upload or select sample job, company, and candidate data
+2. Initialize the interview
+3. Start the interview session
+
+### During the Interview
+1. Read questions from the AI interviewer
+2. Type responses or use voice input
+3. Ask questions naturally during your responses
+
+### After the Interview
+1. Review the AI-generated assessment
+2. Explore the visual analytics dashboard
+3. Download or share your results
+
+## Recent Improvements
+
+### Visual Analytics Enhancement
+The visual summary dashboard has been completely redesigned for better readability and professionalism:
+- **Improved Text Handling**: Truncation with tooltips for long text
+- **Better Layout**: Increased margins and spacing for readability
+- **Enhanced Charts**: Rounded corners, better animations, and responsive design
+- **Professional Styling**: Color harmonization and consistent typography
+
+### Error Resilience
+Multiple layers of error handling have been implemented:
+- **Defensive Object Processing**: Robust handling of various data structures
+- **Speech Synthesis Improvements**: Better error management for voice controls
+- **Comprehensive Validation**: Type checking and fallback mechanisms
+- **Graceful Degradation**: Sensible defaults when data is missing or malformed
+
+### Development Experience
+Enhanced developer workflow with:
+- **Hot Module Replacement**: Frontend changes reflect instantly
+- **Flask Auto-Reload**: Backend changes apply automatically
+- **Unified Development Script**: Single command to start both servers
+- **Better Error Reporting**: More descriptive error messages
+
+### React Component Upgrades
+- **Advanced State Management**: Better handling of loading and error states
+- **Type-Safe Interfaces**: Enhanced TypeScript interfaces for complex objects
+- **Conditional Rendering**: Improved handling of missing or malformed data
+- **Accessibility Improvements**: Better screen reader support and keyboard navigation
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **No frontend content displayed**: Make sure to build the frontend using the build.sh script
-2. **LLM connection errors**: Check if the configured LLM provider is accessible
-   - For Ollama, ensure it's running locally with `ollama serve`
-   - Verify model availability with `ollama list`
-3. **Session expiry issues**: Check the session timeout configuration in web_app.py
-4. **JSON parsing errors**: These are now handled automatically by the multi-layer parsing system
-5. **Interview summary generation failures**: Check the application logs for specific parsing errors
+#### Speech Recognition Not Working
+- Ensure your browser supports the Web Speech API
+- Check microphone permissions
+- Try a different browser (Chrome works best)
 
-## Contributing
+#### Visual Summary Errors
+- Ensure the interview is fully completed
+- Check the console for specific error messages
+- Verify LLM connectivity for summary generation
 
-To contribute to the project:
+#### LLM Connection Issues
+- Verify Ollama is running (or your chosen LLM provider)
+- Check network connectivity
+- Ensure your API keys are correctly configured
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request 
+### Getting Help
+
+For additional assistance:
+- Check the [GitHub Issues](https://github.com/jaineet17/ai-interview-agent/issues)
+- Review the [Solution Narrative](SOLUTION_NARRATIVE.md) for detailed implementation explanations
+- Contact the project maintainers through GitHub 

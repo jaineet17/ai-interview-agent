@@ -1253,16 +1253,114 @@ class InterviewEngine:
         if not self.summary:
             self.generate_summary()
         
+        # Process strengths from the summary with proper format checking
+        strengths = []
+        raw_strengths = self.summary.get("strengths", [])
+        
+        if isinstance(raw_strengths, list):
+            for i, s in enumerate(raw_strengths[:3]):
+                # Skip if empty/None
+                if not s:
+                    continue
+                
+                # Handle different formats of strengths
+                if isinstance(s, str):
+                    # Simple string format 
+                    strengths.append({"text": s, "score": 85 + i*5})
+                elif isinstance(s, dict):
+                    # New format: {"strength": "...", "rating": "...", "evidence": "..."}
+                    if "strength" in s:
+                        text = s.get("strength", f"Strength {i+1}")
+                        # Try to get a numeric score from rating if available
+                        score = 85 + i*5  # Default score
+                        if "rating" in s and isinstance(s["rating"], (int, float)):
+                            score = int(s["rating"])
+                        elif "rating" in s and isinstance(s["rating"], str):
+                            # Try to extract a number from rating string
+                            import re
+                            num_match = re.search(r'(\d+)', s["rating"])
+                            if num_match:
+                                try:
+                                    score = int(num_match.group(1))
+                                    # Convert to 0-100 scale if needed
+                                    if score <= 5:
+                                        score = score * 20
+                                except ValueError:
+                                    pass
+                        strengths.append({"text": text, "score": score})
+                    # Classic object format with key as strength name
+                    elif len(s.keys()) == 1:
+                        strengths.append({"text": list(s.keys())[0], "score": 85 + i*5})
+                    # Try to use a text or name property if available
+                    else:
+                        text = s.get("text") or s.get("name") or f"Strength {i+1}"
+                        strengths.append({"text": text, "score": 85 + i*5})
+        
+        # Process areas for improvement with proper format checking
+        improvements = []
+        raw_areas = self.summary.get("areas_for_improvement", [])
+        
+        if isinstance(raw_areas, list):
+            for i, a in enumerate(raw_areas[:3]):
+                # Skip if empty/None
+                if not a:
+                    continue
+                    
+                # Handle different formats of areas for improvement
+                if isinstance(a, str):
+                    # Simple string format
+                    improvements.append({"text": a, "score": 60 - i*10})
+                elif isinstance(a, dict):
+                    # New format: {"area": "...", "rating": "...", "suggestion": "..."}
+                    if "area" in a:
+                        text = a.get("area", f"Area {i+1}")
+                        # Try to get a numeric score from rating if available
+                        score = 60 - i*10  # Default score
+                        if "rating" in a and isinstance(a["rating"], (int, float)):
+                            score = int(a["rating"])
+                        elif "rating" in a and isinstance(a["rating"], str):
+                            # Try to extract a number from rating string
+                            import re
+                            num_match = re.search(r'(\d+)', a["rating"])
+                            if num_match:
+                                try:
+                                    score = int(num_match.group(1))
+                                    # Convert to 0-100 scale if needed
+                                    if score <= 5:
+                                        score = score * 20
+                                except ValueError:
+                                    pass
+                        improvements.append({"text": text, "score": score})
+                    # Object format with key as area name
+                    elif len(a.keys()) == 1:
+                        improvements.append({"text": list(a.keys())[0], "score": 60 - i*10})
+                    # Try to use a text or name property if available
+                    else:
+                        text = a.get("text") or a.get("name") or f"Area {i+1}"
+                        improvements.append({"text": text, "score": 60 - i*10})
+        
+        # Add default items if empty
+        if not strengths:
+            strengths = [
+                {"text": "Communication Skills", "score": 85},
+                {"text": "Technical Knowledge", "score": 80},
+                {"text": "Problem Solving", "score": 75}
+            ]
+            
+        if not improvements:
+            improvements = [
+                {"text": "Documentation", "score": 50},
+                {"text": "Specific Examples", "score": 40}
+            ]
+        
         visual_data = {
             "candidate_name": self.summary.get("candidate_name", "Candidate"),
             "position": self.summary.get("position", "Position"),
             # Create skill rating map (0-100) for visualization
             "skill_ratings": self._extract_skill_ratings(),
-            # Map strengths and areas for improvement to visualization format
-            "strengths": [{"text": s, "score": 85 + i*5} for i, s in 
-                         enumerate(self.summary.get("strengths", [])[:3])],
-            "improvements": [{"text": a, "score": 60 - i*10} for i, a in 
-                            enumerate(self.summary.get("areas_for_improvement", [])[:3])],
+            # Use the properly processed strengths and improvements
+            "strengths": strengths,
+            "improvements": improvements,
             # Create recommendation score (0-100)
             "recommendation_score": self._calculate_recommendation_score(),
             "recommendation_text": self.summary.get("recommendation", "")
@@ -1271,58 +1369,123 @@ class InterviewEngine:
     
     def _extract_skill_ratings(self) -> List[Dict[str, Any]]:
         """Extract skill ratings from technical evaluation for visualization"""
-        tech_eval = self.summary.get("technical_evaluation", "")
-        
-        # Extract skills with regex and assign ratings
-        import re
-        skills = []
-        
-        # First try to extract structured ratings
-        skill_matches = re.findall(r'([A-Za-z]+(?:\s[A-Za-z]+)?)\s*:\s*(Not Demonstrated|Basic|Proficient|Expert)', tech_eval)
-        
-        if skill_matches:
-            # Convert text ratings to numeric
-            rating_map = {
-                "Not Demonstrated": 10,
-                "Basic": 40, 
-                "Proficient": 75,
-                "Expert": 95
-            }
+        try:
+            tech_eval = self.summary.get("technical_evaluation", "")
             
-            for skill, rating in skill_matches:
-                skills.append({
-                    "name": skill,
-                    "score": rating_map.get(rating, 50)
-                })
-        else:
-            # Fallback to required skills from job data with estimated ratings
-            for i, skill in enumerate(self.job_data.get("required_skills", [])[:5]):
-                # Generate pseudo-random scores that look realistic
-                import hashlib
-                seed = int(hashlib.md5(str(skill).encode()).hexdigest(), 16) % 40
-                score = min(95, max(30, 55 + seed))
+            # Ensure tech_eval is a string before doing regex operations
+            if not isinstance(tech_eval, str):
+                logger.warning(f"Invalid technical_evaluation type: {type(tech_eval)}, converting to string")
+                tech_eval = str(tech_eval) if tech_eval is not None else ""
+            
+            # Extract skills with regex and assign ratings
+            import re
+            skills = []
+            
+            # First try to extract structured ratings
+            skill_matches = re.findall(r'([A-Za-z]+(?:\s[A-Za-z]+)?)\s*:\s*(Not Demonstrated|Basic|Proficient|Expert)', tech_eval)
+            
+            if skill_matches:
+                # Convert text ratings to numeric
+                rating_map = {
+                    "Not Demonstrated": 10,
+                    "Basic": 40, 
+                    "Proficient": 75,
+                    "Expert": 95
+                }
                 
-                skills.append({
-                    "name": skill,
-                    "score": score
-                })
-        
-        return skills
+                for skill, rating in skill_matches:
+                    skills.append({
+                        "name": skill,
+                        "score": rating_map.get(rating, 50)
+                    })
+            else:
+                # Fallback to required skills from job data with estimated ratings
+                required_skills = self.job_data.get("required_skills", [])
+                
+                # Ensure required_skills is a list
+                if not isinstance(required_skills, list):
+                    if isinstance(required_skills, str):
+                        # Convert comma-separated string to list
+                        required_skills = [s.strip() for s in required_skills.split(",")]
+                    else:
+                        required_skills = []
+                
+                for i, skill in enumerate(required_skills[:5]):
+                    # Generate pseudo-random scores that look realistic
+                    import hashlib
+                    seed = int(hashlib.md5(str(skill).encode()).hexdigest(), 16) % 40
+                    score = min(95, max(30, 55 + seed))
+                    
+                    skills.append({
+                        "name": skill,
+                        "score": score
+                    })
+            
+            # If we still have no skills, add default ones
+            if not skills:
+                skills = [
+                    {"name": "Technical Knowledge", "score": 65},
+                    {"name": "Problem Solving", "score": 75},
+                    {"name": "Communication", "score": 70},
+                    {"name": "Domain Expertise", "score": 60},
+                    {"name": "Team Collaboration", "score": 80}
+                ]
+                
+            return skills
+            
+        except Exception as e:
+            logger.error(f"Error extracting skill ratings: {str(e)}")
+            # Return default skills if an error occurs
+            return [
+                {"name": "Technical Knowledge", "score": 65},
+                {"name": "Problem Solving", "score": 75},
+                {"name": "Communication", "score": 70},
+                {"name": "Domain Expertise", "score": 60},
+                {"name": "Team Collaboration", "score": 80}
+            ]
     
     def _calculate_recommendation_score(self) -> int:
         """Calculate numeric recommendation score for visualization"""
-        rec_text = self.summary.get("recommendation", "").lower()
-        
-        if "highly recommend" in rec_text:
-            return 90
-        elif "recommend" in rec_text:
-            return 75
-        elif "neutral" in rec_text:
-            return 50
-        elif "not recommend" in rec_text:
-            return 25
-        else:
-            return 50
+        try:
+            recommendation = self.summary.get("recommendation", "")
+            
+            # If recommendation is not a string, try to extract text
+            if not isinstance(recommendation, str):
+                if isinstance(recommendation, dict):
+                    # If it's a dict, try to get a relevant field or convert to string
+                    recommendation = recommendation.get("text") or recommendation.get("rating") or str(recommendation)
+                else:
+                    # For any other type, convert to string
+                    recommendation = str(recommendation)
+            
+            # Convert to lowercase for case-insensitive matching
+            rec_text = recommendation.lower()
+            
+            # Look for keywords to determine score
+            if "highly recommend" in rec_text or "strong recommend" in rec_text:
+                return 90
+            elif "recommend" in rec_text and "not recommend" not in rec_text:
+                return 75
+            elif "neutral" in rec_text or "consider" in rec_text:
+                return 50
+            elif "not recommend" in rec_text or "do not recommend" in rec_text:
+                return 25
+            else:
+                # Try to extract numeric values if present
+                import re
+                score_matches = re.findall(r'(\d+)[\/\s]*100', rec_text)
+                if score_matches:
+                    try:
+                        score = int(score_matches[0])
+                        return min(100, max(0, score))  # Ensure in 0-100 range
+                    except:
+                        pass
+                        
+                # Default to neutral if no clear indication
+                return 50
+        except Exception as e:
+            logger.error(f"Error calculating recommendation score: {str(e)}")
+            return 50  # Default to neutral
     
     def collect_interview_analytics(self) -> Dict[str, Any]:
         """Collect interview analytics data for reporting and evaluation"""

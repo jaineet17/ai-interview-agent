@@ -30,11 +30,6 @@ const Interview = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [voiceEnabled, setVoiceEnabled] = useState<boolean>(true);
   const [latestAgentMessage, setLatestAgentMessage] = useState<string>('');
-  const [showTypingIndicator, setShowTypingIndicator] = useState(false);
-  const [isWaitingForResponse, setIsWaitingForResponse] = useState(false);
-  const [current, setCurrent] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [total, setTotal] = useState(0);
 
   // Scroll to bottom whenever messages change
   useEffect(() => {
@@ -134,8 +129,7 @@ const Interview = () => {
     setIsSending(true);
 
     try {
-      // Show typing indicator
-      setShowTypingIndicator(true);
+      // No need to show typing indicator
       
       const response = await processResponse(userMessage.content);
 
@@ -174,7 +168,6 @@ const Interview = () => {
       console.error(err);
     } finally {
       setIsSending(false);
-      setShowTypingIndicator(false);
     }
   };
 

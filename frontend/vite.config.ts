@@ -17,5 +17,16 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    hmr: {
+      overlay: true,  // Show errors as overlay
+    },
+    watch: {
+      usePolling: true,  // Use polling for more reliable file watching
+      interval: 1000,    // Check every second
+    },
+    open: true,          // Auto-open browser on start
+  },
+  build: {
+    sourcemap: true, // Enable source maps for production builds
   },
 }); 

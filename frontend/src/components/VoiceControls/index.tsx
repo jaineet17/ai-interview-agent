@@ -112,18 +112,33 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
   };
 
   const speakMessage = (text: string) => {
-    if (speechSynthesisSupported && speechEnabled && ttsEnabled) {
-      // Cancel any ongoing speech
+    if (!speechSynthesisSupported || !ttsEnabled || !text || isSpeaking) {
+      return;
+    }
+    
+    try {
+      // First cancel any ongoing speech
       window.speechSynthesis.cancel();
       
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US';
+      
+      // Select a voice - prefer a female voice if available
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        // Look for a good voice - prefer female English voices
+        const preferredVoice = voices.find(voice => 
+          voice.lang.includes('en') && voice.name.includes('Female')
+        ) || voices.find(voice => 
+          voice.lang.includes('en')
+        ) || voices[0];
+        
+        utterance.voice = preferredVoice;
+      }
+      
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
       
-      utterance.onstart = () => {
-        setIsSpeaking(true);
-      };
+      setIsSpeaking(true);
       
       utterance.onend = () => {
         setIsSpeaking(false);
@@ -132,9 +147,13 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
       utterance.onerror = (event) => {
         console.error('Speech synthesis error', event);
         setIsSpeaking(false);
+        // Don't rethrow the error, just log it and continue
       };
       
       window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error('Error setting up speech synthesis:', error);
+      setIsSpeaking(false);
     }
   };
 

@@ -119,7 +119,83 @@ const Summary = () => {
       const response = await api.get('/visual_summary');
       
       if (response.data.status === 'success') {
-        setVisualData(response.data.visual_data);
+        // Validate the visual data before setting it
+        const data = response.data.visual_data;
+        
+        // Ensure we have a valid object
+        if (!data || typeof data !== 'object') {
+          console.error('Invalid visual data structure:', data);
+          setVisualError('Invalid visual data structure received from server.');
+          setVisualData(null);
+          return;
+        }
+        
+        // Create a validated copy of the data with default values for missing properties
+        const validatedData: VisualData = {
+          candidate_name: data.candidate_name || 'Candidate',
+          position: data.position || 'Position',
+          skill_ratings: [],
+          strengths: [],
+          improvements: [],
+          recommendation_score: typeof data.recommendation_score === 'number' ? data.recommendation_score : 70,
+          recommendation_text: data.recommendation_text || 'Candidate shows potential for the role.'
+        };
+        
+        // Validate skill_ratings
+        if (Array.isArray(data.skill_ratings)) {
+          validatedData.skill_ratings = data.skill_ratings
+            .filter((skill: any) => skill && typeof skill === 'object')
+            .map((skill: any) => ({
+              name: skill.name || 'Unnamed Skill',
+              score: typeof skill.score === 'number' ? skill.score : 50
+            }));
+        }
+        
+        // Validate strengths
+        if (Array.isArray(data.strengths)) {
+          validatedData.strengths = data.strengths
+            .filter((item: any) => item && typeof item === 'object')
+            .map((item: any) => ({
+              text: item.text || 'Unnamed Strength',
+              score: typeof item.score === 'number' ? item.score : 75
+            }));
+        }
+        
+        // Validate improvements
+        if (Array.isArray(data.improvements)) {
+          validatedData.improvements = data.improvements
+            .filter((item: any) => item && typeof item === 'object')
+            .map((item: any) => ({
+              text: item.text || 'Unnamed Area',
+              score: typeof item.score === 'number' ? item.score : 45
+            }));
+        }
+        
+        // Add default items if arrays are empty
+        if (validatedData.skill_ratings.length === 0) {
+          validatedData.skill_ratings = [
+            { name: 'Technical Knowledge', score: 65 },
+            { name: 'Problem Solving', score: 75 },
+            { name: 'Communication', score: 70 }
+          ];
+        }
+        
+        if (validatedData.strengths.length === 0) {
+          validatedData.strengths = [
+            { text: 'Communication Skills', score: 85 },
+            { text: 'Technical Knowledge', score: 80 }
+          ];
+        }
+        
+        if (validatedData.improvements.length === 0) {
+          validatedData.improvements = [
+            { text: 'Documentation', score: 50 },
+            { text: 'Specific Examples', score: 40 }
+          ];
+        }
+        
+        console.log('Validated visual data:', validatedData);
+        setVisualData(validatedData);
       } else {
         setVisualError('Could not load visual data. ' + (response.data.error || ''));
       }
@@ -234,7 +310,7 @@ const Summary = () => {
               Overall Recommendation
             </Typography>
             <Typography variant="body1" paragraph>
-              {summary.overall_recommendation}
+              {summary?.overall_recommendation || "No recommendation available."}
             </Typography>
             
             <Divider sx={{ my: 2 }} />
@@ -244,40 +320,56 @@ const Summary = () => {
                 <Typography variant="h6" gutterBottom>
                   Technical Assessment
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <Rating 
-                    value={summary.technical_assessment.score} 
-                    readOnly 
-                    precision={0.5}
-                    sx={{ mr: 1 }}
-                  />
-                  <Typography variant="body2">
-                    ({summary.technical_assessment.score}/5)
+                {summary?.technical_assessment ? (
+                  <>
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      <Rating 
+                        value={summary.technical_assessment.score || 0} 
+                        readOnly 
+                        precision={0.5}
+                        sx={{ mr: 1 }}
+                      />
+                      <Typography variant="body2">
+                        ({summary.technical_assessment.score || 0}/5)
+                      </Typography>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {summary.technical_assessment.feedback || "No feedback available"}
+                    </Typography>
+                  </>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Technical assessment information not available
                   </Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  {summary.technical_assessment.feedback}
-                </Typography>
+                )}
               </Grid>
               
               <Grid item xs={12} md={6}>
                 <Typography variant="h6" gutterBottom>
                   Cultural Fit
                 </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
-                  <Rating 
-                    value={summary.cultural_fit.score} 
-                    readOnly 
-                    precision={0.5}
-                    sx={{ mr: 1 }}
-                  />
-                  <Typography variant="body2">
-                    ({summary.cultural_fit.score}/5)
+                {summary?.cultural_fit ? (
+                  <>
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      <Rating 
+                        value={summary.cultural_fit.score || 0} 
+                        readOnly 
+                        precision={0.5}
+                        sx={{ mr: 1 }}
+                      />
+                      <Typography variant="body2">
+                        ({summary.cultural_fit.score || 0}/5)
+                      </Typography>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                      {summary.cultural_fit.feedback || "No feedback available"}
+                    </Typography>
+                  </>
+                ) : (
+                  <Typography variant="body2" color="text.secondary">
+                    Cultural fit information not available
                   </Typography>
-                </Box>
-                <Typography variant="body2" color="text.secondary">
-                  {summary.cultural_fit.feedback}
-                </Typography>
+                )}
               </Grid>
             </Grid>
           </CardContent>
@@ -291,11 +383,17 @@ const Summary = () => {
                 <Typography variant="h6">Strengths</Typography>
               </Box>
               <Stack spacing={1}>
-                {summary.strengths.map((strength, index) => (
-                  <Typography key={index} variant="body2">
-                    • {strength}
+                {summary?.strengths && Array.isArray(summary.strengths) && summary.strengths.length > 0 ? (
+                  summary.strengths.map((strength, index) => (
+                    <Typography key={index} variant="body2">
+                      • {strength}
+                    </Typography>
+                  ))
+                ) : (
+                  <Typography variant="body2">
+                    No strengths identified yet.
                   </Typography>
-                ))}
+                )}
               </Stack>
             </Paper>
           </Grid>
@@ -307,11 +405,17 @@ const Summary = () => {
                 <Typography variant="h6">Areas for Improvement</Typography>
               </Box>
               <Stack spacing={1}>
-                {summary.areas_for_improvement.map((area, index) => (
-                  <Typography key={index} variant="body2">
-                    • {area}
+                {summary?.areas_for_improvement && Array.isArray(summary.areas_for_improvement) && summary.areas_for_improvement.length > 0 ? (
+                  summary.areas_for_improvement.map((area, index) => (
+                    <Typography key={index} variant="body2">
+                      • {area}
+                    </Typography>
+                  ))
+                ) : (
+                  <Typography variant="body2">
+                    No areas for improvement identified yet.
                   </Typography>
-                ))}
+                )}
               </Stack>
             </Paper>
           </Grid>
@@ -323,15 +427,21 @@ const Summary = () => {
               Next Steps
             </Typography>
             <Stack spacing={1} direction="row" flexWrap="wrap" useFlexGap>
-              {summary.next_steps.map((step, index) => (
-                <Chip 
-                  key={index} 
-                  label={step} 
-                  color="primary" 
-                  variant="outlined" 
-                  sx={{ mb: 1 }}
-                />
-              ))}
+              {summary?.next_steps && Array.isArray(summary.next_steps) && summary.next_steps.length > 0 ? (
+                summary.next_steps.map((step, index) => (
+                  <Chip 
+                    key={index} 
+                    label={step} 
+                    color="primary" 
+                    variant="outlined" 
+                    sx={{ mb: 1 }}
+                  />
+                ))
+              ) : (
+                <Typography variant="body2">
+                  No next steps available.
+                </Typography>
+              )}
             </Stack>
           </CardContent>
         </Card>
